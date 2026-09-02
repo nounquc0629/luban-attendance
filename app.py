@@ -31,11 +31,15 @@ def init_db():
                   leave_code VARCHAR(50),
                   timestamp TIMESTAMP,
                   ip_address VARCHAR(50))''')
-    # 員工表增加 hire_date (到職日) 欄位來計算勞基法特休
+    
     c.execute('''CREATE TABLE IF NOT EXISTS employees
                  (id SERIAL PRIMARY KEY,
                   name VARCHAR(100),
                   hire_date DATE)''')
+    
+    # 自動檢查並補上 hire_date 欄位（針對已經存在的舊資料庫）
+    c.execute('''ALTER TABLE employees ADD COLUMN IF NOT EXISTS hire_date DATE''')
+    
     conn.commit()
     c.close()
     conn.close()
@@ -45,7 +49,6 @@ def calculate_annual_leave(hire_date):
     if not hire_date:
         return 0
     today = datetime.date.today()
-    # 計算年資（天數轉年數）
     service_days = (today - hire_date).days
     if service_days < 180:  # 未滿半年
         return 0
@@ -63,7 +66,6 @@ def calculate_annual_leave(hire_date):
     elif service_years < 10:
         return 15
     else:
-        # 10年以上每一年加1日，上限30日
         days = 15 + int(service_years - 10)
         return min(days, 30)
 
@@ -239,7 +241,7 @@ ADMIN_TEMPLATE = """
                             <li>
                                 <div>
                                     <strong style="font-size: 16px;">{{ emp[0] }}</strong> 
-                                    <span style="color: #666; font-size: 13px; margin-left: 15px;">(到職日: {{ emp[1] }})</span>
+                                    <span style="color: #666; font-size: 13px; margin-left: 15px;">(到職日: {{ emp[1] if emp[1] else '未設定' }})</span>
                                     <span style="color: #007bff; font-size: 13px; margin-left: 15px; font-weight: bold;">
                                         法定特休總天數: {{ emp[2] }} 天 | 已休: {{ emp[3] }} 天 | 剩餘: {{ emp[2] - emp[3] }} 天
                                     </span>
@@ -400,23 +402,19 @@ def admin():
             conn = get_db_connection()
             c = conn.cursor()
             
-            # 取得所有員工及其到職日
             c.execute("SELECT name, hire_date FROM employees ORDER BY id")
             raw_emps = c.fetchall()
             
-            # 計算每位員工的法定特休與已休天數
             for emp in raw_emps:
                 name = emp[0]
                 hire_date = emp[1]
                 total_annual_leave = calculate_annual_leave(hire_date)
                 
-                # 計算該員工已被記錄的特休天數
                 c.execute("SELECT COUNT(*) FROM records WHERE emp_name = %s AND action = '請假' AND leave_code = '特'", (name,))
                 used_leave = c.fetchone()[0]
                 
                 employees_data.append((name, hire_date, total_annual_leave, used_leave))
 
-            # 計算選擇月份的各員工出勤與請假統計
             year, month = map(int, selected_month.split('-'))
             start_date = datetime.date(year, month, 1)
             if month == 12:
@@ -426,14 +424,12 @@ def admin():
 
             for emp in raw_emps:
                 name = emp[0]
-                # 統計該月份「上班」的天數（以不重複日期計算或計算上班打卡次數）
                 c.execute("""
                     SELECT COUNT(DISTINCT DATE(timestamp)) FROM records 
                     WHERE emp_name = %s AND action = '上班' AND timestamp >= %s AND timestamp < %s
                 """, (name, start_date, end_date))
                 work_days = c.fetchone()[0]
 
-                # 統計該月份各種請假天數
                 c.execute("""
                     SELECT leave_code, COUNT(*) FROM records 
                     WHERE emp_name = %s AND action = '請假' AND timestamp >= %s AND timestamp < %s AND leave_code IS NOT NULL AND leave_code != ''
@@ -448,7 +444,6 @@ def admin():
                     'leaves': leaves
                 })
 
-            # 取得所有打卡明細
             c.execute("SELECT id, emp_name, action, leave_code, timestamp, ip_address FROM records ORDER BY id DESC")
             records = c.fetchall()
             c.close()
