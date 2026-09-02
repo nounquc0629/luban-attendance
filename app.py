@@ -4,12 +4,9 @@ from flask import Flask, request, render_template_string, redirect, url_for, ses
 import datetime
 
 app = Flask(__name__)
-app.secret_key = 'luban_repair_secret_key'  # 登入後台用的密鑰
+app.secret_key = 'luban_repair_secret_key'
 
-# 管理員登入密碼 (您可以自行修改這裡的密碼)
 ADMIN_PASSWORD = "luban888"
-
-# 店內 Wi-Fi 路由器的對外 IP
 STORE_PUBLIC_IP = "123.45.67.89" 
 
 def get_db_connection():
@@ -22,7 +19,6 @@ def init_db():
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        # 建立打卡紀錄表
         c.execute('''CREATE TABLE IF NOT EXISTS records
                      (id SERIAL PRIMARY KEY,
                       emp_name VARCHAR(100),
@@ -30,7 +26,6 @@ def init_db():
                       leave_code VARCHAR(50),
                       timestamp TIMESTAMP,
                       ip_address VARCHAR(50))''')
-        # 建立員工名單表
         c.execute('''CREATE TABLE IF NOT EXISTS employees
                      (id SERIAL PRIMARY KEY,
                       name VARCHAR(100) UNIQUE)''')
@@ -38,11 +33,11 @@ def init_db():
         c.close()
         conn.close()
     except Exception as e:
-        print(f"資料庫初始化提示: {e}")
+        print(f"資料庫初始化錯誤: {e}")
 
+# 確保啟動時建立表格
 init_db()
 
-# 員工打卡前端頁面
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -104,7 +99,6 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# 老闆後台登入與管理頁面
 ADMIN_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="zh-TW">
@@ -140,7 +134,6 @@ ADMIN_TEMPLATE = """
                 {% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
             </form>
         {% else %}
-            <!-- 員工名單管理 -->
             <div class="section">
                 <h3>👥 員工名單管理 (新增/刪除)</h3>
                 <form method="POST" action="/admin/employee">
@@ -160,7 +153,6 @@ ADMIN_TEMPLATE = """
                 </ul>
             </div>
 
-            <!-- 出勤紀錄檢視 -->
             <div class="section">
                 <h3>📋 員工出勤與請假紀錄總覽</h3>
                 <table>
@@ -195,14 +187,18 @@ ADMIN_TEMPLATE = """
 def index():
     message = ""
     success = False
+    employees = []
 
-    # 抓取目前資料庫中的員工名單
-    conn = get_db_connection()
-    c = conn.cursor()
-    c.execute("SELECT name FROM employees ORDER BY id")
-    employees = [row[0] for row in c.fetchall()]
-    c.close()
-    conn.close()
+    try:
+        init_db()
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("SELECT name FROM employees ORDER BY id")
+        employees = [row[0] for row in c.fetchall()]
+        c.close()
+        conn.close()
+    except Exception as e:
+        employees = []
 
     if request.method == 'POST':
         emp_name = request.form.get('emp_name')
@@ -250,16 +246,18 @@ def admin():
     employees = []
     records = []
     if logged_in:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT name FROM employees ORDER BY id")
-        employees = [row[0] for row in c.fetchall()]
-        
-        # 抓取所有打卡紀錄（最新的排在最前面）
-        c.execute("SELECT id, emp_name, action, leave_code, timestamp, ip_address FROM records ORDER BY id DESC")
-        records = c.fetchall()
-        c.close()
-        conn.close()
+        try:
+            init_db()
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("SELECT name FROM employees ORDER BY id")
+            employees = [row[0] for row in c.fetchall()]
+            c.execute("SELECT id, emp_name, action, leave_code, timestamp, ip_address FROM records ORDER BY id DESC")
+            records = c.fetchall()
+            c.close()
+            conn.close()
+        except Exception as e:
+            print(f"讀取後台資料失敗: {e}")
 
     return render_template_string(ADMIN_TEMPLATE, logged_in=logged_in, error=error, employees=employees, records=records)
 
