@@ -19,7 +19,6 @@ def init_db():
     try:
         conn = get_db_connection()
         c = conn.cursor()
-        # 建立打卡紀錄表
         c.execute('''CREATE TABLE IF NOT EXISTS records
                      (id SERIAL PRIMARY KEY,
                       emp_name VARCHAR(100),
@@ -27,7 +26,6 @@ def init_db():
                       leave_code VARCHAR(50),
                       timestamp TIMESTAMP,
                       ip_address VARCHAR(50))''')
-        # 建立員工名單表
         c.execute('''CREATE TABLE IF NOT EXISTS employees
                      (id SERIAL PRIMARY KEY,
                       name VARCHAR(100) UNIQUE)''')
@@ -37,7 +35,6 @@ def init_db():
     except Exception as e:
         print(f"資料庫初始化錯誤: {e}")
 
-# 每次啟動或重新整理強制確保資料表存在
 init_db()
 
 HTML_TEMPLATE = """
@@ -140,6 +137,7 @@ ADMIN_TEMPLATE = """
         {% else %}
             <div class="section">
                 <h3>👥 員工名單管理 (新增/刪除)</h3>
+                <!-- 這裡補上了明確的 action 與 method -->
                 <form method="POST" action="/admin/employee">
                     <input type="text" name="new_emp_name" placeholder="輸入新員工姓名" required>
                     <button type="submit">新增員工</button>
