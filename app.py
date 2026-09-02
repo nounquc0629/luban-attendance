@@ -37,7 +37,6 @@ def init_db():
                   name VARCHAR(100),
                   hire_date DATE)''')
     
-    # 自動檢查並補上 hire_date 欄位（針對已經存在的舊資料庫）
     c.execute('''ALTER TABLE employees ADD COLUMN IF NOT EXISTS hire_date DATE''')
     
     conn.commit()
@@ -161,9 +160,13 @@ HTML_TEMPLATE = """
             </select>
             <select name="leave_code">
                 <option value="">請假代號 (非請假免填)</option>
-                <option value="特">特 (特休 - 依勞基法計算)</option>
-                <option value="病">病 (病假)</option>
-                <option value="事">事 (事假)</option>
+                <option value="特">特休假 (有薪)</option>
+                <option value="病">普通傷病假 (半薪)</option>
+                <option value="事">事假 (無薪)</option>
+                <option value="婚">婚假 (有薪)</option>
+                <option value="喪">喪假 (有薪)</option>
+                <option value="陪">陪產假 (有薪)</option>
+                <option value="產">產假/產檢假 (有薪)</option>
                 <option value="其他">其他</option>
             </select>
             <button type="submit" id="submit-btn">送出打卡紀錄</button>
@@ -187,13 +190,13 @@ ADMIN_TEMPLATE = """
     <title>魯班手機維修 - 老闆管理後台</title>
     <style>
         body { font-family: '微軟正黑體', sans-serif; padding: 20px; background-color: #f8f9fa; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .container { max-width: 1050px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         h2, h3 { color: #333; }
         input, button, select { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; font-size: 15px; }
         button { background-color: #28a745; color: white; border: none; cursor: pointer; font-weight: bold; }
         button.danger { background-color: #dc3545; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #dee2e6; padding: 10px; text-align: center; font-size: 14px; }
+        th, td { border: 1px solid #dee2e6; padding: 10px; text-align: center; font-size: 13px; }
         th { background-color: #007bff; color: white; }
         tr:nth-child(even) { background-color: #f2f2f2; }
         .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #eee; }
@@ -208,7 +211,7 @@ ADMIN_TEMPLATE = """
 <body>
     <div class="container">
         <a href="/" class="back-link">← 返回打卡首頁</a>
-        <h2>⚙️ 魯班手機維修 - 管理員後台 (勞基法特休與月份結算)</h2>
+        <h2>⚙️ 魯班手機維修 - 管理員後台 (勞基法薪資與假別管理)</h2>
 
         {% if not logged_in %}
             <form method="POST" action="/admin">
@@ -225,7 +228,7 @@ ADMIN_TEMPLATE = """
 
             <!-- 員工與勞基法特休管理 -->
             <div class="section">
-                <h3>👥 員工名單與勞基法特休額度</h3>
+                <h3>👥 員工名單與法定特休額度</h3>
                 <form method="POST" action="/admin/employee">
                     <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                         <input type="text" name="new_emp_name" placeholder="輸入新員工姓名" required style="flex: 1; margin: 0; min-width: 150px;">
@@ -260,7 +263,7 @@ ADMIN_TEMPLATE = """
 
             <!-- 月份結算報表 -->
             <div class="section">
-                <h3>📊 員工月份出勤與工時結算</h3>
+                <h3>📊 員工月份出勤與勞基法假別統計</h3>
                 <form method="GET" action="/admin" style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
                     <label for="month" style="font-weight: bold;">選擇結算月份：</label>
                     <input type="month" id="month" name="month" value="{{ selected_month }}" style="margin: 0;">
@@ -271,18 +274,22 @@ ADMIN_TEMPLATE = """
                     <tr>
                         <th>員工姓名</th>
                         <th>結算月份</th>
-                        <th>實際上班打卡天數</th>
-                        <th>請假統計 (特休 / 病 / 事 / 其他)</th>
+                        <th>實際上班天數</th>
+                        <th>各假別統計 (特/病/事/婚/喪/陪/產/其他)</th>
                     </tr>
                     {% for stat in monthly_stats %}
                     <tr>
                         <td><strong>{{ stat.name }}</strong></td>
                         <td>{{ selected_month }}</td>
-                        <td><span style="color: #28a745; font-weight: bold; font-size: 16px;">{{ stat.work_days }} 天</span></td>
-                        <td>
-                            特休: <span style="color: #d9534f; font-weight: bold;">{{ stat.leaves.get('特', 0) }}</span> 天 | 
-                            病假: {{ stat.leaves.get('病', 0) }} 天 | 
-                            事假: {{ stat.leaves.get('事', 0) }} 天 | 
+                        <td><span style="color: #28a745; font-weight: bold; font-size: 15px;">{{ stat.work_days }} 天</span></td>
+                        <td style="text-align: left; padding-left: 15px;">
+                            特休(有薪): <span style="color: #d9534f; font-weight: bold;">{{ stat.leaves.get('特', 0) }}</span> 天 | 
+                            病假(半薪): <span style="font-weight: bold;">{{ stat.leaves.get('病', 0) }}</span> 天 | 
+                            事假(無薪): <span style="font-weight: bold;">{{ stat.leaves.get('事', 0) }}</span> 天 | 
+                            婚假: {{ stat.leaves.get('婚', 0) }} 天 | 
+                            喪假: {{ stat.leaves.get('喪', 0) }} 天 | 
+                            陪產: {{ stat.leaves.get('陪', 0) }} 天 | 
+                            產假: {{ stat.leaves.get('產', 0) }} 天 | 
                             其他: {{ stat.leaves.get('其他', 0) }} 天
                         </td>
                     </tr>
@@ -366,10 +373,7 @@ def index():
             conn.close()
             
             success = True
-            if action == "請假" and leave_code == "特":
-                message = f"✅ {emp_name} 特休登記成功！(已依勞基法列入計算)"
-            else:
-                message = f"✅ {emp_name} {action} 紀錄已同步！"
+            message = f"✅ {emp_name} {action} 紀錄已同步！"
         except Exception as e:
             message = f"❌ 系統錯誤：{e}"
 
@@ -424,9 +428,11 @@ def admin():
 
             for emp in raw_emps:
                 name = emp[0]
+                # 計算上班天數（只計算星期一到星期五的上班打卡紀錄，排除週末漏打卡被誤算）
                 c.execute("""
                     SELECT COUNT(DISTINCT DATE(timestamp)) FROM records 
                     WHERE emp_name = %s AND action = '上班' AND timestamp >= %s AND timestamp < %s
+                    AND EXTRACT(ISODOW FROM timestamp) <= 5
                 """, (name, start_date, end_date))
                 work_days = c.fetchone()[0]
 
@@ -448,7 +454,7 @@ def admin():
             records = c.fetchall()
             c.close()
             conn.close()
-            db_status = "🟢 資料庫連線正常 (勞基法特休與月份結算運作中)"
+            db_status = "🟢 資料庫連線正常 (勞基法完整假別與出勤防護運作中)"
         except Exception as e:
             db_status = f"🔴 資料庫連線異常: {e}"
 
