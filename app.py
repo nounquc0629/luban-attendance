@@ -7,13 +7,16 @@ app = Flask(__name__)
 app.secret_key = 'luban_repair_secret_key'
 
 ADMIN_PASSWORD = "luban888"
-STORE_PUBLIC_IP = "123.45.67.89" 
+
+# 魯班手機維修店面座標與 50 公尺限制
+STORE_LAT = 22.686950
+STORE_LNG = 120.309500
+MAX_DISTANCE_METERS = 50  # 限制 50 公尺內
 
 def get_db_connection():
     db_url = os.environ.get('DATABASE_URL')
     if not db_url:
         raise ValueError("未設定 DATABASE_URL 環境變數，請確認 Render 後台設定。")
-    # 相容 Render 的 postgres:// 前綴
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
     return psycopg2.connect(db_url)
@@ -21,7 +24,6 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     c = conn.cursor()
-    # 建立打卡紀錄表
     c.execute('''CREATE TABLE IF NOT EXISTS records
                  (id SERIAL PRIMARY KEY,
                   emp_name VARCHAR(100),
@@ -29,7 +31,6 @@ def init_db():
                   leave_code VARCHAR(50),
                   timestamp TIMESTAMP,
                   ip_address VARCHAR(50))''')
-    # 建立員工名單表 (採用純文字欄位，不設嚴苛限制避免出錯)
     c.execute('''CREATE TABLE IF NOT EXISTS employees
                  (id SERIAL PRIMARY KEY,
                   name VARCHAR(100))''')
@@ -57,12 +58,86 @@ HTML_TEMPLATE = """
         .admin-link { margin-top: 20px; display: block; color: #666; text-decoration: none; font-size: 0.9em; }
         .admin-link:hover { color: #007bff; }
     </style>
+    <script>
+        function verifyLocation(event) {
+            event.preventDefault(); // 暫停預設提交
+            
+            if (!navigator.geolocation) {
+                alert("您的瀏覽器不支援定位功能，無法打卡！");
+                return;
+            }
+
+            const btn = document.getElementById('submit-btn');
+            btn.innerText = "正在進行店面 GPS 定位驗證...";
+            btn.disabled = true;
+
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const userLat = position.coords.latitude;
+                    const userLng = position.coords.longitude;
+                    
+                    // 計算與店面的距離 (公尺)
+                    const storeLat = {{ store_lat }};
+                    const storeLng = {{ store_lng }};
+                    const maxDist = {{ max_dist }};
+
+                    const distance = getDistanceFromLatLonInMeters(userLat, userLng, storeLat, storeLng);
+
+                    if (distance > maxDist) {
+                        alert("❌ 距離店面太遠 (" + Math.round(distance) + "公尺)。必須在店面 50 公尺範圍內才能打卡！");
+                        btn.innerText = "送出打卡紀錄";
+                        btn.disabled = false;
+                    } else {
+                        // 通過距離驗證，把經緯度塞入表單送出
+                        const form = document.getElementById('clock-form');
+                        
+                        let inputLat = document.createElement('input');
+                        inputLat.type = 'hidden';
+                        inputLat.name = 'lat';
+                        inputLat.value = userLat;
+                        form.appendChild(inputLat);
+
+                        let inputLng = document.createElement('input');
+                        inputLng.type = 'hidden';
+                        inputLng.name = 'lng';
+                        inputLng.value = userLng;
+                        form.appendChild(inputLng);
+
+                        form.submit();
+                    }
+                },
+                function(error) {
+                    alert("❌ 無法取得您的 GPS 定位，請確認手機已開啟定位權限並再試一次！");
+                    btn.innerText = "送出打卡紀錄";
+                    btn.disabled = false;
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        }
+
+        function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
+            const R = 6371000; // Radius of earth in meters
+            const dLat = deg2rad(lat2-lat1);
+            const dLon = deg2rad(lon2-lon1); 
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2)
+            ; 
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
+            return R * c;
+        }
+
+        function deg2rad(deg) {
+            return deg * (Math.PI/180);
+        }
+    </script>
 </head>
 <body>
     <div class="container">
         <h2>🛠️ 魯班手機維修<br>員工出勤系統</h2>
         
-        <form method="POST" action="/">
+        <form id="clock-form" method="POST" action="/" onsubmit="verifyLocation(event)">
             <select name="emp_name" required>
                 <option value="" disabled selected>-- 請選擇您的名字 --</option>
                 {% for emp in employees %}
@@ -84,7 +159,7 @@ HTML_TEMPLATE = """
                 <option value="其他">其他</option>
             </select>
             
-            <button type="submit">送出打卡紀錄</button>
+            <button type="submit" id="submit-btn">送出打卡紀錄</button>
         </form>
 
         {% if message %}
@@ -93,7 +168,7 @@ HTML_TEMPLATE = """
         
         <a href="/admin" class="admin-link">⚙️ 老闆後台管理</a>
     </div>
-    <div class="footer">Luban Mobile Repair System</div>
+    <div class="footer">Luban Mobile Repair System (GPS 50m Lock)</div>
 </body>
 </html>
 """
@@ -138,7 +213,6 @@ ADMIN_TEMPLATE = """
                 {% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
             </form>
         {% else %}
-            <!-- 狀態看板與提示 -->
             <div class="status-tag" style="background-color: #e9ecef;">{{ db_status }}</div>
 
             {% if msg %}
@@ -148,7 +222,6 @@ ADMIN_TEMPLATE = """
                 <div class="alert-danger">{{ error }}</div>
             {% endif %}
 
-            <!-- 員工名單管理 -->
             <div class="section">
                 <h3>👥 員工名單管理 (新增/刪除)</h3>
                 <form method="POST" action="/admin/employee">
@@ -175,7 +248,6 @@ ADMIN_TEMPLATE = """
                 </ul>
             </div>
 
-            <!-- 出勤紀錄檢視 -->
             <div class="section">
                 <h3>📋 員工出勤與請假紀錄總覽</h3>
                 <table>
@@ -251,7 +323,7 @@ def index():
         except Exception as e:
             message = f"❌ 系統錯誤：{e}"
 
-    return render_template_string(HTML_TEMPLATE, employees=employees, message=message, success=success)
+    return render_template_string(HTML_TEMPLATE, employees=employees, message=message, success=success, store_lat=STORE_LAT, store_lng=STORE_LNG, max_dist=MAX_DISTANCE_METERS)
 
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
@@ -282,7 +354,7 @@ def admin():
             records = c.fetchall()
             c.close()
             conn.close()
-            db_status = "🟢 資料庫連線正常"
+            db_status = "🟢 資料庫連線正常 (GPS 50公尺防護中)"
         except Exception as e:
             db_status = f"🔴 資料庫連線異常: {e}"
 
@@ -299,7 +371,6 @@ def add_employee():
             init_db()
             conn = get_db_connection()
             c = conn.cursor()
-            # 檢查是否已存在，避免重複加入
             c.execute("SELECT id FROM employees WHERE name = %s", (new_emp,))
             if not c.fetchone():
                 c.execute("INSERT INTO employees (name) VALUES (%s)", (new_emp,))
