@@ -133,6 +133,4 @@ def index():
     return render_template_string(HTML_TEMPLATE, message=message, success=success)
 
 if __name__ == '__main__':
-    # Render 環境預設會給 PORT 環境變數
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 10000)))
