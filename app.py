@@ -37,6 +37,12 @@ def init_db():
                   name VARCHAR(100),
                   hire_date DATE)''')
     
+    # 新增排休假紀錄表 (記錄哪位員工在哪一天排休)
+    c.execute('''CREATE TABLE IF NOT EXISTS schedules
+                 (id SERIAL PRIMARY KEY,
+                  emp_name VARCHAR(100),
+                  off_date DATE)''')
+    
     c.execute('''ALTER TABLE employees ADD COLUMN IF NOT EXISTS hire_date DATE''')
     
     conn.commit()
@@ -190,7 +196,7 @@ ADMIN_TEMPLATE = """
     <title>魯班手機維修 - 老闆管理後台</title>
     <style>
         body { font-family: '微軟正黑體', sans-serif; padding: 20px; background-color: #f8f9fa; }
-        .container { max-width: 1050px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .container { max-width: 1100px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         h2, h3 { color: #333; }
         input, button, select { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; font-size: 15px; }
         button { background-color: #28a745; color: white; border: none; cursor: pointer; font-weight: bold; }
@@ -211,7 +217,7 @@ ADMIN_TEMPLATE = """
 <body>
     <div class="container">
         <a href="/" class="back-link">← 返回打卡首頁</a>
-        <h2>⚙️ 魯班手機維修 - 管理員後台 (勞基法薪資與假別管理)</h2>
+        <h2>⚙️ 魯班手機維修 - 管理員後台 (排休管理與出勤結算)</h2>
 
         {% if not logged_in %}
             <form method="POST" action="/admin">
@@ -261,9 +267,46 @@ ADMIN_TEMPLATE = """
                 </ul>
             </div>
 
+            <!-- 排休假設定 -->
+            <div class="section">
+                <h3>🗓️ 安排員工排休假 (排班制)</h3>
+                <form method="POST" action="/admin/schedule" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <select name="emp_name" required style="flex: 1; margin: 0; min-width: 150px;">
+                        <option value="" disabled selected>-- 選擇員工 --</option>
+                        {% for emp in employees %}
+                            <option value="{{ emp[0] }}">{{ emp[0] }}</option>
+                        {% endfor %}
+                    </select>
+                    <span style="font-size: 14px; color: #555;">排休日期:</span>
+                    <input type="date" name="off_date" value="{{ today_str }}" required style="margin: 0;">
+                    <button type="submit" style="margin: 0; width: auto; padding: 10px 20px; background-color: #17a2b8;">新增排休</button>
+                </form>
+
+                <h4 style="margin-top: 15px; color: #555;">近期排休紀錄：</h4>
+                <table>
+                    <tr>
+                        <th>員工姓名</th>
+                        <th>排休日期</th>
+                        <th>操作</th>
+                    </tr>
+                    {% for sch in schedules %}
+                    <tr>
+                        <td><strong>{{ sch[1] }}</strong></td>
+                        <td>{{ sch[2] }}</td>
+                        <td>
+                            <form action="/admin/schedule/delete" method="POST" style="margin:0;">
+                                <input type="hidden" name="sch_id" value="{{ sch[0] }}">
+                                <button type="submit" class="danger" style="padding:3px 8px; font-size:11px; margin:0; width:auto;">取消排休</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+
             <!-- 月份結算報表 -->
             <div class="section">
-                <h3>📊 員工月份出勤與勞基法假別統計</h3>
+                <h3>📊 員工月份出勤與排休結算</h3>
                 <form method="GET" action="/admin" style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
                     <label for="month" style="font-weight: bold;">選擇結算月份：</label>
                     <input type="month" id="month" name="month" value="{{ selected_month }}" style="margin: 0;">
@@ -275,6 +318,7 @@ ADMIN_TEMPLATE = """
                         <th>員工姓名</th>
                         <th>結算月份</th>
                         <th>實際上班天數</th>
+                        <th>排休天數</th>
                         <th>各假別統計 (特/病/事/婚/喪/陪/產/其他)</th>
                     </tr>
                     {% for stat in monthly_stats %}
@@ -282,10 +326,11 @@ ADMIN_TEMPLATE = """
                         <td><strong>{{ stat.name }}</strong></td>
                         <td>{{ selected_month }}</td>
                         <td><span style="color: #28a745; font-weight: bold; font-size: 15px;">{{ stat.work_days }} 天</span></td>
+                        <td><span style="color: #17a2b8; font-weight: bold; font-size: 15px;">{{ stat.off_days }} 天</span></td>
                         <td style="text-align: left; padding-left: 15px;">
-                            特休(有薪): <span style="color: #d9534f; font-weight: bold;">{{ stat.leaves.get('特', 0) }}</span> 天 | 
-                            病假(半薪): <span style="font-weight: bold;">{{ stat.leaves.get('病', 0) }}</span> 天 | 
-                            事假(無薪): <span style="font-weight: bold;">{{ stat.leaves.get('事', 0) }}</span> 天 | 
+                            特休: <span style="color: #d9534f; font-weight: bold;">{{ stat.leaves.get('特', 0) }}</span> 天 | 
+                            病假: {{ stat.leaves.get('病', 0) }} 天 | 
+                            事假: {{ stat.leaves.get('事', 0) }} 天 | 
                             婚假: {{ stat.leaves.get('婚', 0) }} 天 | 
                             喪假: {{ stat.leaves.get('喪', 0) }} 天 | 
                             陪產: {{ stat.leaves.get('陪', 0) }} 天 | 
@@ -395,6 +440,7 @@ def admin():
 
     employees_data = []
     records = []
+    schedules = []
     monthly_stats = []
     today_str = datetime.date.today().strftime("%Y-%m-%d")
     selected_month = request.args.get('month', datetime.date.today().strftime("%Y-%m"))
@@ -428,14 +474,21 @@ def admin():
 
             for emp in raw_emps:
                 name = emp[0]
-                # 計算上班天數（只計算星期一到星期五的上班打卡紀錄，排除週末漏打卡被誤算）
+                # 實際上班天數
                 c.execute("""
                     SELECT COUNT(DISTINCT DATE(timestamp)) FROM records 
                     WHERE emp_name = %s AND action = '上班' AND timestamp >= %s AND timestamp < %s
-                    AND EXTRACT(ISODOW FROM timestamp) <= 5
                 """, (name, start_date, end_date))
                 work_days = c.fetchone()[0]
 
+                # 排休天數統計
+                c.execute("""
+                    SELECT COUNT(*) FROM schedules 
+                    WHERE emp_name = %s AND off_date >= %s AND off_date < %s
+                """, (name, start_date, end_date))
+                off_days = c.fetchone()[0]
+
+                # 各類請假統計
                 c.execute("""
                     SELECT leave_code, COUNT(*) FROM records 
                     WHERE emp_name = %s AND action = '請假' AND timestamp >= %s AND timestamp < %s AND leave_code IS NOT NULL AND leave_code != ''
@@ -447,19 +500,25 @@ def admin():
                 monthly_stats.append({
                     'name': name,
                     'work_days': work_days,
+                    'off_days': off_days,
                     'leaves': leaves
                 })
 
+            # 取得排休紀錄
+            c.execute("SELECT id, emp_name, off_date FROM schedules ORDER BY off_date DESC LIMIT 20")
+            schedules = c.fetchall()
+
+            # 取得打卡紀錄
             c.execute("SELECT id, emp_name, action, leave_code, timestamp, ip_address FROM records ORDER BY id DESC")
             records = c.fetchall()
             c.close()
             conn.close()
-            db_status = "🟢 資料庫連線正常 (勞基法完整假別與出勤防護運作中)"
+            db_status = "🟢 資料庫連線正常 (排休假管理與月結算運作中)"
         except Exception as e:
             db_status = f"🔴 資料庫連線異常: {e}"
 
     return render_template_string(ADMIN_TEMPLATE, logged_in=logged_in, error=error, msg=msg, db_status=db_status, 
-                                  employees=employees_data, records=records, today_str=today_str, 
+                                  employees=employees_data, records=records, schedules=schedules, today_str=today_str, 
                                   selected_month=selected_month, monthly_stats=monthly_stats)
 
 @app.route('/admin/employee', methods=['POST'])
@@ -506,6 +565,49 @@ def delete_employee():
             session['admin_msg'] = f"✅ 已成功刪除員工：{emp_name}"
         except Exception as e:
             session['admin_err'] = f"❌ 刪除失敗：{e}"
+            
+    return redirect(url_for('admin'))
+
+@app.route('/admin/schedule', methods=['POST'])
+def add_schedule():
+    if not session.get('logged_in'):
+        return redirect(url_for('admin'))
+    
+    emp_name = request.form.get('emp_name')
+    off_date = request.form.get('off_date')
+    
+    if emp_name and off_date:
+        try:
+            init_db()
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("INSERT INTO schedules (emp_name, off_date) VALUES (%s, %s)", (emp_name, off_date))
+            conn.commit()
+            c.close()
+            conn.close()
+            session['admin_msg'] = f"✅ 成功安排 {emp_name} 於 {off_date} 排休"
+        except Exception as e:
+            session['admin_err'] = f"❌ 排休設定失敗：{e}"
+            
+    return redirect(url_for('admin'))
+
+@app.route('/admin/schedule/delete', methods=['POST'])
+def delete_schedule():
+    if not session.get('logged_in'):
+        return redirect(url_for('admin'))
+    
+    sch_id = request.form.get('sch_id')
+    if sch_id:
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("DELETE FROM schedules WHERE id = %s", (sch_id,))
+            conn.commit()
+            c.close()
+            conn.close()
+            session['admin_msg'] = f"✅ 已成功取消該筆排休紀錄"
+        except Exception as e:
+            session['admin_err'] = f"❌ 取消排休失敗：{e}"
             
     return redirect(url_for('admin'))
 
