@@ -19,6 +19,7 @@ def init_db():
     try:
         conn = get_db_connection()
         c = conn.cursor()
+        # 建立打卡紀錄表
         c.execute('''CREATE TABLE IF NOT EXISTS records
                      (id SERIAL PRIMARY KEY,
                       emp_name VARCHAR(100),
@@ -26,6 +27,7 @@ def init_db():
                       leave_code VARCHAR(50),
                       timestamp TIMESTAMP,
                       ip_address VARCHAR(50))''')
+        # 建立員工名單表
         c.execute('''CREATE TABLE IF NOT EXISTS employees
                      (id SERIAL PRIMARY KEY,
                       name VARCHAR(100) UNIQUE)''')
@@ -35,7 +37,7 @@ def init_db():
     except Exception as e:
         print(f"資料庫初始化錯誤: {e}")
 
-# 確保啟動時建立表格
+# 每次啟動或重新整理強制確保資料表存在
 init_db()
 
 HTML_TEMPLATE = """
@@ -119,6 +121,8 @@ ADMIN_TEMPLATE = """
         tr:nth-child(even) { background-color: #f2f2f2; }
         .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #eee; }
         .back-link { display: inline-block; margin-bottom: 15px; color: #007bff; text-decoration: none; }
+        ul { list-style-type: none; padding: 0; }
+        li { background: #f9f9f9; margin: 5px 0; padding: 8px 12px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
     </style>
 </head>
 <body>
@@ -143,10 +147,10 @@ ADMIN_TEMPLATE = """
                 <ul>
                     {% for emp in employees %}
                         <li>
-                            {{ emp }} 
-                            <form action="/admin/employee/delete" method="POST" style="display:inline;">
+                            <span>{{ emp }}</span>
+                            <form action="/admin/employee/delete" method="POST" style="margin:0;">
                                 <input type="hidden" name="emp_name" value="{{ emp }}">
-                                <button type="submit" class="danger" style="padding:2px 8px; font-size:12px;">刪除</button>
+                                <button type="submit" class="danger" style="padding:4px 10px; font-size:13px; margin:0;">刪除</button>
                             </form>
                         </li>
                     {% endfor %}
@@ -189,8 +193,8 @@ def index():
     success = False
     employees = []
 
+    init_db()
     try:
-        init_db()
         conn = get_db_connection()
         c = conn.cursor()
         c.execute("SELECT name FROM employees ORDER BY id")
@@ -246,8 +250,8 @@ def admin():
     employees = []
     records = []
     if logged_in:
+        init_db()
         try:
-            init_db()
             conn = get_db_connection()
             c = conn.cursor()
             c.execute("SELECT name FROM employees ORDER BY id")
@@ -268,6 +272,7 @@ def add_employee():
     
     new_emp = request.form.get('new_emp_name', '').strip()
     if new_emp:
+        init_db()
         try:
             conn = get_db_connection()
             c = conn.cursor()
