@@ -11,7 +11,7 @@ ADMIN_PASSWORD = "luban888"
 # 魯班手機維修店面座標與 50 公尺限制
 STORE_LAT = 22.686950
 STORE_LNG = 120.309500
-MAX_DISTANCE_METERS = 50  # 限制 50 公尺內
+MAX_DISTANCE_METERS = 50
 
 def get_db_connection():
     db_url = os.environ.get('DATABASE_URL')
@@ -31,12 +31,41 @@ def init_db():
                   leave_code VARCHAR(50),
                   timestamp TIMESTAMP,
                   ip_address VARCHAR(50))''')
+    # 員工表增加 hire_date (到職日) 欄位來計算勞基法特休
     c.execute('''CREATE TABLE IF NOT EXISTS employees
                  (id SERIAL PRIMARY KEY,
-                  name VARCHAR(100))''')
+                  name VARCHAR(100),
+                  hire_date DATE)''')
     conn.commit()
     c.close()
     conn.close()
+
+# 勞基法特休計算邏輯
+def calculate_annual_leave(hire_date):
+    if not hire_date:
+        return 0
+    today = datetime.date.today()
+    # 計算年資（天數轉年數）
+    service_days = (today - hire_date).days
+    if service_days < 180:  # 未滿半年
+        return 0
+    
+    service_years = service_days / 365.25
+    
+    if service_years < 1:
+        return 3
+    elif service_years < 2:
+        return 7
+    elif service_years < 3:
+        return 10
+    elif service_years < 5:
+        return 14
+    elif service_years < 10:
+        return 15
+    else:
+        # 10年以上每一年加1日，上限30日
+        days = 15 + int(service_years - 10)
+        return min(days, 30)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -61,12 +90,10 @@ HTML_TEMPLATE = """
     <script>
         function verifyLocation(event) {
             event.preventDefault();
-            
             if (!navigator.geolocation) {
                 alert("您的瀏覽器不支援定位功能，無法打卡！");
                 return;
             }
-
             const btn = document.getElementById('submit-btn');
             btn.innerText = "正在進行店面 GPS 定位驗證...";
             btn.disabled = true;
@@ -75,7 +102,6 @@ HTML_TEMPLATE = """
                 function(position) {
                     const userLat = position.coords.latitude;
                     const userLng = position.coords.longitude;
-                    
                     const storeLat = {{ store_lat }};
                     const storeLng = {{ store_lng }};
                     const maxDist = {{ max_dist }};
@@ -88,19 +114,12 @@ HTML_TEMPLATE = """
                         btn.disabled = false;
                     } else {
                         const form = document.getElementById('clock-form');
-                        
                         let inputLat = document.createElement('input');
-                        inputLat.type = 'hidden';
-                        inputLat.name = 'lat';
-                        inputLat.value = userLat;
+                        inputLat.type = 'hidden'; inputLat.name = 'lat'; inputLat.value = userLat;
                         form.appendChild(inputLat);
-
                         let inputLng = document.createElement('input');
-                        inputLng.type = 'hidden';
-                        inputLng.name = 'lng';
-                        inputLng.value = userLng;
+                        inputLng.type = 'hidden'; inputLng.name = 'lng'; inputLng.value = userLng;
                         form.appendChild(inputLng);
-
                         form.submit();
                     }
                 },
@@ -117,52 +136,39 @@ HTML_TEMPLATE = """
             const R = 6371000;
             const dLat = deg2rad(lat2-lat1);
             const dLon = deg2rad(lon2-lon1); 
-            const a = 
-                Math.sin(dLat/2) * Math.sin(dLat/2) +
-                Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
-                Math.sin(dLon/2) * Math.sin(dLon/2); 
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
-            return R * c;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * Math.sin(dLon/2) * Math.sin(dLon/2); 
+            return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
         }
-
-        function deg2rad(deg) {
-            return deg * (Math.PI/180);
-        }
+        function deg2rad(deg) { return deg * (Math.PI/180); }
     </script>
 </head>
 <body>
     <div class="container">
         <h2>🛠️ 魯班手機維修<br>員工出勤系統</h2>
-        
         <form id="clock-form" method="POST" action="/" onsubmit="verifyLocation(event)">
             <select name="emp_name" required>
                 <option value="" disabled selected>-- 請選擇您的名字 --</option>
                 {% for emp in employees %}
-                    <option value="{{ emp }}">{{ emp }}</option>
+                    <option value="{{ emp[0] }}">{{ emp[0] }}</option>
                 {% endfor %}
             </select>
-            
             <select name="action" required>
                 <option value="上班">上班 (Clock In)</option>
                 <option value="下班">下班 (Clock Out)</option>
                 <option value="請假">請假 (Leave)</option>
             </select>
-            
             <select name="leave_code">
                 <option value="">請假代號 (非請假免填)</option>
-                <option value="特">特 (特休 - 不計入工時)</option>
+                <option value="特">特 (特休 - 依勞基法計算)</option>
                 <option value="病">病 (病假)</option>
                 <option value="事">事 (事假)</option>
                 <option value="其他">其他</option>
             </select>
-            
             <button type="submit" id="submit-btn">送出打卡紀錄</button>
         </form>
-
         {% if message %}
             <div class="message {% if success %}success{% endif %}">{{ message }}</div>
         {% endif %}
-        
         <a href="/admin" class="admin-link">⚙️ 老闆後台管理</a>
     </div>
     <div class="footer">Luban Mobile Repair System (GPS 50m Lock)</div>
@@ -179,28 +185,28 @@ ADMIN_TEMPLATE = """
     <title>魯班手機維修 - 老闆管理後台</title>
     <style>
         body { font-family: '微軟正黑體', sans-serif; padding: 20px; background-color: #f8f9fa; }
-        .container { max-width: 950px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         h2, h3 { color: #333; }
-        input, button { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; font-size: 15px; }
+        input, button, select { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; font-size: 15px; }
         button { background-color: #28a745; color: white; border: none; cursor: pointer; font-weight: bold; }
         button.danger { background-color: #dc3545; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #dee2e6; padding: 12px; text-align: center; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th, td { border: 1px solid #dee2e6; padding: 10px; text-align: center; font-size: 14px; }
         th { background-color: #007bff; color: white; }
         tr:nth-child(even) { background-color: #f2f2f2; }
         .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #eee; }
         .back-link { display: inline-block; margin-bottom: 15px; color: #007bff; text-decoration: none; }
         ul { list-style-type: none; padding: 0; }
-        li { background: #f1f3f5; margin: 6px 0; padding: 8px 14px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
+        li { background: #f1f3f5; margin: 6px 0; padding: 10px 14px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
         .alert-success { background-color: #d4edda; color: #155724; padding: 12px; border-radius: 6px; margin-bottom: 15px; }
         .alert-danger { background-color: #f8d7da; color: #721c24; padding: 12px; border-radius: 6px; margin-bottom: 15px; }
-        .status-tag { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.9em; font-weight: bold; margin-bottom: 15px; }
+        .status-tag { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.9em; font-weight: bold; margin-bottom: 15px; background-color: #e9ecef; }
     </style>
 </head>
 <body>
     <div class="container">
         <a href="/" class="back-link">← 返回打卡首頁</a>
-        <h2>⚙️ 魯班手機維修 - 管理員後台</h2>
+        <h2>⚙️ 魯班手機維修 - 管理員後台 (勞基法特休與月份結算)</h2>
 
         {% if not logged_in %}
             <form method="POST" action="/admin">
@@ -210,21 +216,20 @@ ADMIN_TEMPLATE = """
                 {% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
             </form>
         {% else %}
-            <div class="status-tag" style="background-color: #e9ecef;">{{ db_status }}</div>
+            <div class="status-tag">{{ db_status }}</div>
 
-            {% if msg %}
-                <div class="alert-success">{{ msg }}</div>
-            {% endif %}
-            {% if error %}
-                <div class="alert-danger">{{ error }}</div>
-            {% endif %}
+            {% if msg %}<div class="alert-success">{{ msg }}</div>{% endif %}
+            {% if error %}<div class="alert-danger">{{ error }}</div>{% endif %}
 
+            <!-- 員工與勞基法特休管理 -->
             <div class="section">
-                <h3>👥 員工名單管理 (新增/刪除)</h3>
+                <h3>👥 員工名單與勞基法特休額度</h3>
                 <form method="POST" action="/admin/employee">
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        <input type="text" name="new_emp_name" placeholder="輸入新員工姓名" required style="flex: 1; margin: 0;">
-                        <button type="submit" style="margin: 0; width: auto; padding: 10px 24px;">新增員工</button>
+                    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                        <input type="text" name="new_emp_name" placeholder="輸入新員工姓名" required style="flex: 1; margin: 0; min-width: 150px;">
+                        <span style="font-size: 14px; color: #555;">到職日:</span>
+                        <input type="date" name="hire_date" value="{{ today_str }}" required style="margin: 0;">
+                        <button type="submit" style="margin: 0; width: auto; padding: 10px 20px;">新增員工</button>
                     </div>
                 </form>
 
@@ -232,21 +237,60 @@ ADMIN_TEMPLATE = """
                     {% if employees %}
                         {% for emp in employees %}
                             <li>
-                                <strong style="font-size: 16px;">{{ emp }}</strong>
+                                <div>
+                                    <strong style="font-size: 16px;">{{ emp[0] }}</strong> 
+                                    <span style="color: #666; font-size: 13px; margin-left: 15px;">(到職日: {{ emp[1] }})</span>
+                                    <span style="color: #007bff; font-size: 13px; margin-left: 15px; font-weight: bold;">
+                                        法定特休總天數: {{ emp[2] }} 天 | 已休: {{ emp[3] }} 天 | 剩餘: {{ emp[2] - emp[3] }} 天
+                                    </span>
+                                </div>
                                 <form action="/admin/employee/delete" method="POST" style="margin:0;">
-                                    <input type="hidden" name="emp_name" value="{{ emp }}">
-                                    <button type="submit" class="danger" style="padding:4px 12px; font-size:13px; margin:0; width:auto;">刪除</button>
+                                    <input type="hidden" name="emp_name" value="{{ emp[0] }}">
+                                    <button type="submit" class="danger" style="padding:4px 10px; font-size:12px; margin:0; width:auto;">刪除</button>
                                 </form>
                             </li>
                         {% endfor %}
                     {% else %}
-                        <li style="background: transparent; color: #888; justify-content: center;">目前名單中尚無員工，請在上方輸入姓名新增。</li>
+                        <li style="background: transparent; color: #888; justify-content: center;">目前名單中尚無員工。</li>
                     {% endif %}
                 </ul>
             </div>
 
+            <!-- 月份結算報表 -->
             <div class="section">
-                <h3>📋 員工出勤與請假紀錄總覽</h3>
+                <h3>📊 員工月份出勤與工時結算</h3>
+                <form method="GET" action="/admin" style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
+                    <label for="month" style="font-weight: bold;">選擇結算月份：</label>
+                    <input type="month" id="month" name="month" value="{{ selected_month }}" style="margin: 0;">
+                    <button type="submit" style="background-color: #007bff; margin: 0; width: auto; padding: 8px 16px;">查詢月份報表</button>
+                </form>
+
+                <table>
+                    <tr>
+                        <th>員工姓名</th>
+                        <th>結算月份</th>
+                        <th>實際上班打卡天數</th>
+                        <th>請假統計 (特休 / 病 / 事 / 其他)</th>
+                    </tr>
+                    {% for stat in monthly_stats %}
+                    <tr>
+                        <td><strong>{{ stat.name }}</strong></td>
+                        <td>{{ selected_month }}</td>
+                        <td><span style="color: #28a745; font-weight: bold; font-size: 16px;">{{ stat.work_days }} 天</span></td>
+                        <td>
+                            特休: <span style="color: #d9534f; font-weight: bold;">{{ stat.leaves.get('特', 0) }}</span> 天 | 
+                            病假: {{ stat.leaves.get('病', 0) }} 天 | 
+                            事假: {{ stat.leaves.get('事', 0) }} 天 | 
+                            其他: {{ stat.leaves.get('其他', 0) }} 天
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+
+            <!-- 打卡紀錄總覽 -->
+            <div class="section">
+                <h3>📋 所有打卡與請假明細紀錄</h3>
                 <table>
                     <tr>
                         <th>編號</th>
@@ -268,7 +312,7 @@ ADMIN_TEMPLATE = """
                         <td>
                             <form action="/admin/record/delete" method="POST" style="margin:0;">
                                 <input type="hidden" name="record_id" value="{{ row[0] }}">
-                                <button type="submit" class="danger" style="padding:4px 10px; font-size:12px; margin:0; width:auto;">刪除</button>
+                                <button type="submit" class="danger" style="padding:4px 8px; font-size:11px; margin:0; width:auto;">刪除</button>
                             </form>
                         </td>
                     </tr>
@@ -292,8 +336,8 @@ def index():
         init_db()
         conn = get_db_connection()
         c = conn.cursor()
-        c.execute("SELECT name FROM employees ORDER BY id")
-        employees = [row[0] for row in c.fetchall()]
+        c.execute("SELECT name, hire_date FROM employees ORDER BY id")
+        employees = c.fetchall()
         c.close()
         conn.close()
     except Exception as e:
@@ -311,7 +355,6 @@ def index():
         
         try:
             current_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
-            
             conn = get_db_connection()
             c = conn.cursor()
             c.execute("INSERT INTO records (emp_name, action, leave_code, timestamp, ip_address) VALUES (%s, %s, %s, %s, %s)",
@@ -322,7 +365,7 @@ def index():
             
             success = True
             if action == "請假" and leave_code == "特":
-                message = f"✅ {emp_name} 特休登記成功！(已排除工時計算)"
+                message = f"✅ {emp_name} 特休登記成功！(已依勞基法列入計算)"
             else:
                 message = f"✅ {emp_name} {action} 紀錄已同步！"
         except Exception as e:
@@ -344,8 +387,11 @@ def admin():
         else:
             error = "密碼錯誤，請重新輸入！"
 
-    employees = []
+    employees_data = []
     records = []
+    monthly_stats = []
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    selected_month = request.args.get('month', datetime.date.today().strftime("%Y-%m"))
     db_status = "連線檢查中..."
 
     if logged_in:
@@ -353,17 +399,67 @@ def admin():
             init_db()
             conn = get_db_connection()
             c = conn.cursor()
-            c.execute("SELECT name FROM employees ORDER BY id")
-            employees = [row[0] for row in c.fetchall()]
+            
+            # 取得所有員工及其到職日
+            c.execute("SELECT name, hire_date FROM employees ORDER BY id")
+            raw_emps = c.fetchall()
+            
+            # 計算每位員工的法定特休與已休天數
+            for emp in raw_emps:
+                name = emp[0]
+                hire_date = emp[1]
+                total_annual_leave = calculate_annual_leave(hire_date)
+                
+                # 計算該員工已被記錄的特休天數
+                c.execute("SELECT COUNT(*) FROM records WHERE emp_name = %s AND action = '請假' AND leave_code = '特'", (name,))
+                used_leave = c.fetchone()[0]
+                
+                employees_data.append((name, hire_date, total_annual_leave, used_leave))
+
+            # 計算選擇月份的各員工出勤與請假統計
+            year, month = map(int, selected_month.split('-'))
+            start_date = datetime.date(year, month, 1)
+            if month == 12:
+                end_date = datetime.date(year + 1, 1, 1)
+            else:
+                end_date = datetime.date(year, month + 1, 1)
+
+            for emp in raw_emps:
+                name = emp[0]
+                # 統計該月份「上班」的天數（以不重複日期計算或計算上班打卡次數）
+                c.execute("""
+                    SELECT COUNT(DISTINCT DATE(timestamp)) FROM records 
+                    WHERE emp_name = %s AND action = '上班' AND timestamp >= %s AND timestamp < %s
+                """, (name, start_date, end_date))
+                work_days = c.fetchone()[0]
+
+                # 統計該月份各種請假天數
+                c.execute("""
+                    SELECT leave_code, COUNT(*) FROM records 
+                    WHERE emp_name = %s AND action = '請假' AND timestamp >= %s AND timestamp < %s AND leave_code IS NOT NULL AND leave_code != ''
+                    GROUP BY leave_code
+                """, (name, start_date, end_date))
+                leave_rows = c.fetchall()
+                leaves = {row[0]: row[1] for row in leave_rows}
+
+                monthly_stats.append({
+                    'name': name,
+                    'work_days': work_days,
+                    'leaves': leaves
+                })
+
+            # 取得所有打卡明細
             c.execute("SELECT id, emp_name, action, leave_code, timestamp, ip_address FROM records ORDER BY id DESC")
             records = c.fetchall()
             c.close()
             conn.close()
-            db_status = "🟢 資料庫連線正常 (具備紀錄刪除功能)"
+            db_status = "🟢 資料庫連線正常 (勞基法特休與月份結算運作中)"
         except Exception as e:
             db_status = f"🔴 資料庫連線異常: {e}"
 
-    return render_template_string(ADMIN_TEMPLATE, logged_in=logged_in, error=error, msg=msg, db_status=db_status, employees=employees, records=records)
+    return render_template_string(ADMIN_TEMPLATE, logged_in=logged_in, error=error, msg=msg, db_status=db_status, 
+                                  employees=employees_data, records=records, today_str=today_str, 
+                                  selected_month=selected_month, monthly_stats=monthly_stats)
 
 @app.route('/admin/employee', methods=['POST'])
 def add_employee():
@@ -371,6 +467,8 @@ def add_employee():
         return redirect(url_for('admin'))
     
     new_emp = request.form.get('new_emp_name', '').strip()
+    hire_date_str = request.form.get('hire_date', datetime.date.today().strftime("%Y-%m-%d"))
+    
     if new_emp:
         try:
             init_db()
@@ -378,9 +476,9 @@ def add_employee():
             c = conn.cursor()
             c.execute("SELECT id FROM employees WHERE name = %s", (new_emp,))
             if not c.fetchone():
-                c.execute("INSERT INTO employees (name) VALUES (%s)", (new_emp,))
+                c.execute("INSERT INTO employees (name, hire_date) VALUES (%s, %s)", (new_emp, hire_date_str))
                 conn.commit()
-                session['admin_msg'] = f"✅ 成功新增員工：{new_emp}"
+                session['admin_msg'] = f"✅ 成功新增員工：{new_emp} (到職日: {hire_date_str})"
             else:
                 session['admin_err'] = f"⚠️ 員工「{new_emp}」已在名單中！"
             c.close()
