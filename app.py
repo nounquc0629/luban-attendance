@@ -179,7 +179,7 @@ ADMIN_TEMPLATE = """
     <title>魯班手機維修 - 老闆管理後台</title>
     <style>
         body { font-family: '微軟正黑體', sans-serif; padding: 20px; background-color: #f8f9fa; }
-        .container { max-width: 900px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .container { max-width: 950px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         h2, h3 { color: #333; }
         input, button { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; font-size: 15px; }
         button { background-color: #28a745; color: white; border: none; cursor: pointer; font-weight: bold; }
@@ -255,6 +255,7 @@ ADMIN_TEMPLATE = """
                         <th>請假代號</th>
                         <th>打卡時間 (台灣時間)</th>
                         <th>IP 位址</th>
+                        <th>操作</th>
                     </tr>
                     {% for row in records %}
                     <tr>
@@ -264,6 +265,12 @@ ADMIN_TEMPLATE = """
                         <td>{{ row[3] if row[3] else '-' }}</td>
                         <td>{{ row[4] }}</td>
                         <td>{{ row[5] }}</td>
+                        <td>
+                            <form action="/admin/record/delete" method="POST" style="margin:0;">
+                                <input type="hidden" name="record_id" value="{{ row[0] }}">
+                                <button type="submit" class="danger" style="padding:4px 10px; font-size:12px; margin:0; width:auto;">刪除</button>
+                            </form>
+                        </td>
                     </tr>
                     {% endfor %}
                 </table>
@@ -303,7 +310,6 @@ def index():
             user_ip = request.remote_addr
         
         try:
-            # 強制轉換為台灣時間 (UTC + 8 小時)
             current_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
             
             conn = get_db_connection()
@@ -353,7 +359,7 @@ def admin():
             records = c.fetchall()
             c.close()
             conn.close()
-            db_status = "🟢 資料庫連線正常 (GPS 50公尺防護 + 台灣時間)"
+            db_status = "🟢 資料庫連線正常 (具備紀錄刪除功能)"
         except Exception as e:
             db_status = f"🔴 資料庫連線異常: {e}"
 
@@ -401,6 +407,26 @@ def delete_employee():
             session['admin_msg'] = f"✅ 已成功刪除員工：{emp_name}"
         except Exception as e:
             session['admin_err'] = f"❌ 刪除失敗：{e}"
+            
+    return redirect(url_for('admin'))
+
+@app.route('/admin/record/delete', methods=['POST'])
+def delete_record():
+    if not session.get('logged_in'):
+        return redirect(url_for('admin'))
+    
+    record_id = request.form.get('record_id')
+    if record_id:
+        try:
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("DELETE FROM records WHERE id = %s", (record_id,))
+            conn.commit()
+            c.close()
+            conn.close()
+            session['admin_msg'] = f"✅ 已成功刪除編號 #{record_id} 的打卡紀錄"
+        except Exception as e:
+            session['admin_err'] = f"❌ 刪除紀錄失敗：{e}"
             
     return redirect(url_for('admin'))
 
