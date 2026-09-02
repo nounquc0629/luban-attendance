@@ -12,30 +12,30 @@ STORE_PUBLIC_IP = "123.45.67.89"
 def get_db_connection():
     db_url = os.environ.get('DATABASE_URL')
     if not db_url:
-        raise ValueError("沒有找到 DATABASE_URL 環境變數。")
+        raise ValueError("未設定 DATABASE_URL 環境變數，請確認 Render 後台設定。")
+    # 相容 Render 的 postgres:// 前綴
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
     return psycopg2.connect(db_url)
 
 def init_db():
-    try:
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute('''CREATE TABLE IF NOT EXISTS records
-                     (id SERIAL PRIMARY KEY,
-                      emp_name VARCHAR(100),
-                      action VARCHAR(50),
-                      leave_code VARCHAR(50),
-                      timestamp TIMESTAMP,
-                      ip_address VARCHAR(50))''')
-        c.execute('''CREATE TABLE IF NOT EXISTS employees
-                     (id SERIAL PRIMARY KEY,
-                      name VARCHAR(100) UNIQUE)''')
-        conn.commit()
-        c.close()
-        conn.close()
-    except Exception as e:
-        print(f"資料庫初始化錯誤: {e}")
-
-init_db()
+    conn = get_db_connection()
+    c = conn.cursor()
+    # 建立打卡紀錄表
+    c.execute('''CREATE TABLE IF NOT EXISTS records
+                 (id SERIAL PRIMARY KEY,
+                  emp_name VARCHAR(100),
+                  action VARCHAR(50),
+                  leave_code VARCHAR(50),
+                  timestamp TIMESTAMP,
+                  ip_address VARCHAR(50))''')
+    # 建立員工名單表 (採用純文字欄位，不設嚴苛限制避免出錯)
+    c.execute('''CREATE TABLE IF NOT EXISTS employees
+                 (id SERIAL PRIMARY KEY,
+                  name VARCHAR(100))''')
+    conn.commit()
+    c.close()
+    conn.close()
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -91,7 +91,7 @@ HTML_TEMPLATE = """
             <div class="message {% if success %}success{% endif %}">{{ message }}</div>
         {% endif %}
         
-        <a href="/admin" class="admin-link">⚙️ 老闆後台登入</a>
+        <a href="/admin" class="admin-link">⚙️ 老闆後台管理</a>
     </div>
     <div class="footer">Luban Mobile Repair System</div>
 </body>
@@ -119,7 +119,10 @@ ADMIN_TEMPLATE = """
         .section { margin-bottom: 30px; padding-bottom: 20px; border-bottom: 2px solid #eee; }
         .back-link { display: inline-block; margin-bottom: 15px; color: #007bff; text-decoration: none; }
         ul { list-style-type: none; padding: 0; }
-        li { background: #f9f9f9; margin: 5px 0; padding: 8px 12px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
+        li { background: #f1f3f5; margin: 6px 0; padding: 8px 14px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
+        .alert-success { background-color: #d4edda; color: #155724; padding: 12px; border-radius: 6px; margin-bottom: 15px; }
+        .alert-danger { background-color: #f8d7da; color: #721c24; padding: 12px; border-radius: 6px; margin-bottom: 15px; }
+        .status-tag { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.9em; font-weight: bold; margin-bottom: 15px; }
     </style>
 </head>
 <body>
@@ -135,27 +138,44 @@ ADMIN_TEMPLATE = """
                 {% if error %}<p style="color:red;">{{ error }}</p>{% endif %}
             </form>
         {% else %}
+            <!-- 狀態看板與提示 -->
+            <div class="status-tag" style="background-color: #e9ecef;">{{ db_status }}</div>
+
+            {% if msg %}
+                <div class="alert-success">{{ msg }}</div>
+            {% endif %}
+            {% if error %}
+                <div class="alert-danger">{{ error }}</div>
+            {% endif %}
+
+            <!-- 員工名單管理 -->
             <div class="section">
                 <h3>👥 員工名單管理 (新增/刪除)</h3>
                 <form method="POST" action="/admin/employee">
                     <div style="display: flex; gap: 10px; align-items: center;">
                         <input type="text" name="new_emp_name" placeholder="輸入新員工姓名" required style="flex: 1; margin: 0;">
-                        <button type="submit" style="margin: 0; width: auto; padding: 10px 20px;">新增員工</button>
+                        <button type="submit" style="margin: 0; width: auto; padding: 10px 24px;">新增員工</button>
                     </div>
                 </form>
+
                 <ul style="margin-top: 15px;">
-                    {% for emp in employees %}
-                        <li>
-                            <span>{{ emp }}</span>
-                            <form action="/admin/employee/delete" method="POST" style="margin:0;">
-                                <input type="hidden" name="emp_name" value="{{ emp }}">
-                                <button type="submit" class="danger" style="padding:4px 10px; font-size:13px; margin:0; width:auto;">刪除</button>
-                            </form>
-                        </li>
-                    {% endfor %}
+                    {% if employees %}
+                        {% for emp in employees %}
+                            <li>
+                                <strong style="font-size: 16px;">{{ emp }}</strong>
+                                <form action="/admin/employee/delete" method="POST" style="margin:0;">
+                                    <input type="hidden" name="emp_name" value="{{ emp }}">
+                                    <button type="submit" class="danger" style="padding:4px 12px; font-size:13px; margin:0; width:auto;">刪除</button>
+                                </form>
+                            </li>
+                        {% endfor %}
+                    {% else %}
+                        <li style="background: transparent; color: #888; justify-content: center;">目前名單中尚無員工，請在上方輸入姓名新增。</li>
+                    {% endif %}
                 </ul>
             </div>
 
+            <!-- 出勤紀錄檢視 -->
             <div class="section">
                 <h3>📋 員工出勤與請假紀錄總覽</h3>
                 <table>
@@ -192,8 +212,8 @@ def index():
     success = False
     employees = []
 
-    init_db()
     try:
+        init_db()
         conn = get_db_connection()
         c = conn.cursor()
         c.execute("SELECT name FROM employees ORDER BY id")
@@ -201,7 +221,7 @@ def index():
         c.close()
         conn.close()
     except Exception as e:
-        employees = []
+        message = f"讀取名單失敗: {e}"
 
     if request.method == 'POST':
         emp_name = request.form.get('emp_name')
@@ -236,7 +256,8 @@ def index():
 @app.route('/admin', methods=['GET', 'POST'])
 def admin():
     logged_in = session.get('logged_in', False)
-    error = ""
+    error = session.pop('admin_err', '')
+    msg = session.pop('admin_msg', '')
     
     if request.method == 'POST':
         password = request.form.get('password')
@@ -248,9 +269,11 @@ def admin():
 
     employees = []
     records = []
+    db_status = "連線檢查中..."
+
     if logged_in:
-        init_db()
         try:
+            init_db()
             conn = get_db_connection()
             c = conn.cursor()
             c.execute("SELECT name FROM employees ORDER BY id")
@@ -259,10 +282,11 @@ def admin():
             records = c.fetchall()
             c.close()
             conn.close()
+            db_status = "🟢 資料庫連線正常"
         except Exception as e:
-            print(f"讀取後台資料失敗: {e}")
+            db_status = f"🔴 資料庫連線異常: {e}"
 
-    return render_template_string(ADMIN_TEMPLATE, logged_in=logged_in, error=error, employees=employees, records=records)
+    return render_template_string(ADMIN_TEMPLATE, logged_in=logged_in, error=error, msg=msg, db_status=db_status, employees=employees, records=records)
 
 @app.route('/admin/employee', methods=['POST'])
 def add_employee():
@@ -271,16 +295,22 @@ def add_employee():
     
     new_emp = request.form.get('new_emp_name', '').strip()
     if new_emp:
-        init_db()
         try:
+            init_db()
             conn = get_db_connection()
             c = conn.cursor()
-            c.execute("INSERT INTO employees (name) VALUES (%s) ON CONFLICT (name) DO NOTHING", (new_emp,))
-            conn.commit()
+            # 檢查是否已存在，避免重複加入
+            c.execute("SELECT id FROM employees WHERE name = %s", (new_emp,))
+            if not c.fetchone():
+                c.execute("INSERT INTO employees (name) VALUES (%s)", (new_emp,))
+                conn.commit()
+                session['admin_msg'] = f"✅ 成功新增員工：{new_emp}"
+            else:
+                session['admin_err'] = f"⚠️ 員工「{new_emp}」已在名單中！"
             c.close()
             conn.close()
         except Exception as e:
-            print(f"新增員工失敗: {e}")
+            session['admin_err'] = f"❌ 新增失敗，資料庫錯誤：{e}"
             
     return redirect(url_for('admin'))
 
@@ -298,8 +328,9 @@ def delete_employee():
             conn.commit()
             c.close()
             conn.close()
+            session['admin_msg'] = f"✅ 已成功刪除員工：{emp_name}"
         except Exception as e:
-            print(f"刪除員工失敗: {e}")
+            session['admin_err'] = f"❌ 刪除失敗：{e}"
             
     return redirect(url_for('admin'))
 
