@@ -60,7 +60,7 @@ HTML_TEMPLATE = """
     </style>
     <script>
         function verifyLocation(event) {
-            event.preventDefault(); // 暫停預設提交
+            event.preventDefault();
             
             if (!navigator.geolocation) {
                 alert("您的瀏覽器不支援定位功能，無法打卡！");
@@ -76,7 +76,6 @@ HTML_TEMPLATE = """
                     const userLat = position.coords.latitude;
                     const userLng = position.coords.longitude;
                     
-                    // 計算與店面的距離 (公尺)
                     const storeLat = {{ store_lat }};
                     const storeLng = {{ store_lng }};
                     const maxDist = {{ max_dist }};
@@ -88,7 +87,6 @@ HTML_TEMPLATE = """
                         btn.innerText = "送出打卡紀錄";
                         btn.disabled = false;
                     } else {
-                        // 通過距離驗證，把經緯度塞入表單送出
                         const form = document.getElementById('clock-form');
                         
                         let inputLat = document.createElement('input');
@@ -116,14 +114,13 @@ HTML_TEMPLATE = """
         }
 
         function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
-            const R = 6371000; // Radius of earth in meters
+            const R = 6371000;
             const dLat = deg2rad(lat2-lat1);
             const dLon = deg2rad(lon2-lon1); 
             const a = 
                 Math.sin(dLat/2) * Math.sin(dLat/2) +
                 Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
-                Math.sin(dLon/2) * Math.sin(dLon/2)
-            ; 
+                Math.sin(dLon/2) * Math.sin(dLon/2); 
             const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)); 
             return R * c;
         }
@@ -256,7 +253,7 @@ ADMIN_TEMPLATE = """
                         <th>員工姓名</th>
                         <th>狀態</th>
                         <th>請假代號</th>
-                        <th>打卡時間</th>
+                        <th>打卡時間 (台灣時間)</th>
                         <th>IP 位址</th>
                     </tr>
                     {% for row in records %}
@@ -306,7 +303,9 @@ def index():
             user_ip = request.remote_addr
         
         try:
-            current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # 強制轉換為台灣時間 (UTC + 8 小時)
+            current_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
+            
             conn = get_db_connection()
             c = conn.cursor()
             c.execute("INSERT INTO records (emp_name, action, leave_code, timestamp, ip_address) VALUES (%s, %s, %s, %s, %s)",
@@ -354,7 +353,7 @@ def admin():
             records = c.fetchall()
             c.close()
             conn.close()
-            db_status = "🟢 資料庫連線正常 (GPS 50公尺防護中)"
+            db_status = "🟢 資料庫連線正常 (GPS 50公尺防護 + 台灣時間)"
         except Exception as e:
             db_status = f"🔴 資料庫連線異常: {e}"
 
