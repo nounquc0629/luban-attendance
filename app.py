@@ -37,7 +37,7 @@ def init_db():
                   name VARCHAR(100),
                   hire_date DATE)''')
     
-    # 新增排休假紀錄表 (記錄哪位員工在哪一天排休)
+    # 排休假紀錄表 (記錄哪位員工在哪一天排休)
     c.execute('''CREATE TABLE IF NOT EXISTS schedules
                  (id SERIAL PRIMARY KEY,
                   emp_name VARCHAR(100),
@@ -196,7 +196,7 @@ ADMIN_TEMPLATE = """
     <title>魯班手機維修 - 老闆管理後台</title>
     <style>
         body { font-family: '微軟正黑體', sans-serif; padding: 20px; background-color: #f8f9fa; }
-        .container { max-width: 1100px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
         h2, h3 { color: #333; }
         input, button, select { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; font-size: 15px; }
         button { background-color: #28a745; color: white; border: none; cursor: pointer; font-weight: bold; }
@@ -217,7 +217,7 @@ ADMIN_TEMPLATE = """
 <body>
     <div class="container">
         <a href="/" class="back-link">← 返回打卡首頁</a>
-        <h2>⚙️ 魯班手機維修 - 管理員後台 (排休管理與出勤結算)</h2>
+        <h2>⚙️ 魯班手機維修 - 管理員後台 (排休管理、出勤與曠工結算)</h2>
 
         {% if not logged_in %}
             <form method="POST" action="/admin">
@@ -304,7 +304,7 @@ ADMIN_TEMPLATE = """
                 </table>
             </div>
 
-            <!-- 月份結算報表 -->
+            <!-- 月份結算報表 (含曠工統計) -->
             <div class="section">
                 <h3>📊 員工月份出勤與排休結算</h3>
                 <form method="GET" action="/admin" style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
@@ -317,8 +317,9 @@ ADMIN_TEMPLATE = """
                     <tr>
                         <th>員工姓名</th>
                         <th>結算月份</th>
-                        <th>實際上班天數</th>
+                        <th>實際上班</th>
                         <th>排休天數</th>
+                        <th>曠工天數</th>
                         <th>各假別統計 (特/病/事/婚/喪/陪/產/其他)</th>
                     </tr>
                     {% for stat in monthly_stats %}
@@ -327,6 +328,14 @@ ADMIN_TEMPLATE = """
                         <td>{{ selected_month }}</td>
                         <td><span style="color: #28a745; font-weight: bold; font-size: 15px;">{{ stat.work_days }} 天</span></td>
                         <td><span style="color: #17a2b8; font-weight: bold; font-size: 15px;">{{ stat.off_days }} 天</span></td>
+                        <td>
+                            {% if stat.absent_days > 0 %}
+                                <span style="color: #dc3545; font-weight: bold; font-size: 15px;">{{ stat.absent_days }} 天</span>
+                                <div style="font-size: 11px; color: #dc3545; margin-top: 4px;">({{ stat.absent_dates | join(', ') }})</div>
+                            {% else %}
+                                <span style="color: #6c757d;">0 天</span>
+                            {% endif %}
+                        </td>
                         <td style="text-align: left; padding-left: 15px;">
                             特休: <span style="color: #d9534f; font-weight: bold;">{{ stat.leaves.get('特', 0) }}</span> 天 | 
                             病假: {{ stat.leaves.get('病', 0) }} 天 | 
@@ -469,38 +478,73 @@ def admin():
             start_date = datetime.date(year, month, 1)
             if month == 12:
                 end_date = datetime.date(year + 1, 1, 1)
+                last_day = 31
             else:
                 end_date = datetime.date(year, month + 1, 1)
+                last_day = (end_date - datetime.timedelta(days=1)).day
+
+            today = datetime.date.today()
 
             for emp in raw_emps:
                 name = emp[0]
-                # 實際上班天數
+                hire_date = emp[1]
+
+                # 1. 取得當月所有實際上課/上班打卡日期 (集合)
                 c.execute("""
-                    SELECT COUNT(DISTINCT DATE(timestamp)) FROM records 
+                    SELECT DISTINCT DATE(timestamp) FROM records 
                     WHERE emp_name = %s AND action = '上班' AND timestamp >= %s AND timestamp < %s
                 """, (name, start_date, end_date))
-                work_days = c.fetchone()[0]
+                worked_dates = {row[0] for row in c.fetchall()}
+                work_days = len(worked_dates)
 
-                # 排休天數統計
+                # 2. 取得當月所有排休日期 (集合)
                 c.execute("""
-                    SELECT COUNT(*) FROM schedules 
+                    SELECT off_date FROM schedules 
                     WHERE emp_name = %s AND off_date >= %s AND off_date < %s
                 """, (name, start_date, end_date))
-                off_days = c.fetchone()[0]
+                off_dates = {row[0] for row in c.fetchall()}
+                off_days = len(off_dates)
 
-                # 各類請假統計
+                # 3. 取得當月所有請假紀錄 (集合與統計)
                 c.execute("""
-                    SELECT leave_code, COUNT(*) FROM records 
+                    SELECT DATE(timestamp), leave_code FROM records 
                     WHERE emp_name = %s AND action = '請假' AND timestamp >= %s AND timestamp < %s AND leave_code IS NOT NULL AND leave_code != ''
-                    GROUP BY leave_code
                 """, (name, start_date, end_date))
                 leave_rows = c.fetchall()
-                leaves = {row[0]: row[1] for row in leave_rows}
+                leave_dates = {row[0] for row in leave_rows}
+                
+                leaves = {}
+                for row in leave_rows:
+                    code = row[1]
+                    leaves[code] = leaves.get(code, 0) + 1
+
+                # 4. 逐日檢查計算曠工 (只算到今天為止，不預判未來日期)
+                absent_dates = []
+                for d in range(1, last_day + 1):
+                    current_eval_date = datetime.date(year, month, d)
+                    
+                    # 超過今天不計曠工
+                    if current_eval_date > today:
+                        break
+                    
+                    # 尚未到職前不計曠工
+                    if hire_date and current_eval_date < hire_date:
+                        continue
+                    
+                    # 判斷曠工：不是排休日、沒有請假、沒有打上班卡
+                    if (current_eval_date not in off_dates) and \
+                       (current_eval_date not in leave_dates) and \
+                       (current_eval_date not in worked_dates):
+                        absent_dates.append(current_eval_date.strftime("%m/%d"))
+
+                absent_days = len(absent_dates)
 
                 monthly_stats.append({
                     'name': name,
                     'work_days': work_days,
                     'off_days': off_days,
+                    'absent_days': absent_days,
+                    'absent_dates': absent_dates,
                     'leaves': leaves
                 })
 
