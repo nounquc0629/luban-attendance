@@ -8,10 +8,10 @@ app.secret_key = 'luban_repair_secret_key'
 
 ADMIN_PASSWORD = "luban888"
 
-# 魯班手機維修店面座標與 50 公尺限制
+# 魯班手機維修店面座標與 30 公尺限制
 STORE_LAT = 22.686950
 STORE_LNG = 120.309500
-MAX_DISTANCE_METERS = 50
+MAX_DISTANCE_METERS = 30
 
 def get_db_connection():
     db_url = os.environ.get('DATABASE_URL')
@@ -37,7 +37,6 @@ def init_db():
                   name VARCHAR(100),
                   hire_date DATE)''')
     
-    # 排休假紀錄表 (記錄哪位員工在哪一天排休)
     c.execute('''CREATE TABLE IF NOT EXISTS schedules
                  (id SERIAL PRIMARY KEY,
                   emp_name VARCHAR(100),
@@ -83,11 +82,17 @@ HTML_TEMPLATE = """
     <title>魯班手機維修 - 員工出勤系統</title>
     <style>
         body { font-family: '微軟正黑體', sans-serif; text-align: center; padding: 20px; background-color: #f0f2f5; }
-        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 400px; margin: 20px auto; }
+        .container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 420px; margin: 20px auto; }
         h2 { color: #333; margin-bottom: 20px; }
         select, button { width: 100%; box-sizing: border-box; padding: 12px; margin: 10px 0; border-radius: 8px; border: 1px solid #ccc; font-size: 16px; }
-        button { background-color: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; font-size: 18px; margin-top: 20px; transition: 0.3s; }
-        button:hover { background-color: #0056b3; }
+        .btn-group { display: flex; gap: 12px; margin: 15px 0 10px; }
+        .btn-work { background-color: #28a745; color: white; border: none; font-size: 18px; font-weight: bold; cursor: pointer; border-radius: 8px; padding: 14px 0; flex: 1; transition: 0.2s; }
+        .btn-work:hover { background-color: #218838; }
+        .btn-off { background-color: #dc3545; color: white; border: none; font-size: 18px; font-weight: bold; cursor: pointer; border-radius: 8px; padding: 14px 0; flex: 1; transition: 0.2s; }
+        .btn-off:hover { background-color: #c82333; }
+        .leave-box { border-top: 1px dashed #ccc; margin-top: 20px; padding-top: 15px; }
+        .btn-leave { background-color: #6c757d; color: white; border: none; font-size: 16px; cursor: pointer; border-radius: 8px; padding: 10px 0; }
+        .btn-leave:hover { background-color: #5a6268; }
         .message { margin-top: 20px; font-weight: bold; font-size: 1.1em; color: #d9534f; }
         .success { color: #28a745; }
         .footer { margin-top: 30px; font-size: 0.8em; color: #888; }
@@ -95,15 +100,33 @@ HTML_TEMPLATE = """
         .admin-link:hover { color: #007bff; }
     </style>
     <script>
-        function verifyLocation(event) {
-            event.preventDefault();
+        let currentAction = '';
+
+        function submitClock(actionName) {
+            const empSelect = document.getElementById('emp-select');
+            if (!empSelect.value) {
+                alert("請先選擇您的名字！");
+                empSelect.focus();
+                return;
+            }
+
+            if (actionName === '請假') {
+                const leaveCode = document.getElementById('leave-select').value;
+                if (!leaveCode) {
+                    alert("請選擇請假代號！");
+                    return;
+                }
+            }
+
+            currentAction = actionName;
+            document.getElementById('action-input').value = actionName;
+
             if (!navigator.geolocation) {
                 alert("您的瀏覽器不支援定位功能，無法打卡！");
                 return;
             }
-            const btn = document.getElementById('submit-btn');
-            btn.innerText = "正在進行店面 GPS 定位驗證...";
-            btn.disabled = true;
+
+            setButtonsDisabled(true, "正在進行 GPS 定位驗證...");
 
             navigator.geolocation.getCurrentPosition(
                 function(position) {
@@ -116,27 +139,42 @@ HTML_TEMPLATE = """
                     const distance = getDistanceFromLatLonInMeters(userLat, userLng, storeLat, storeLng);
 
                     if (distance > maxDist) {
-                        alert("❌ 距離店面太遠 (" + Math.round(distance) + "公尺)。必須在店面 50 公尺範圍內才能打卡！");
-                        btn.innerText = "送出打卡紀錄";
-                        btn.disabled = false;
+                        alert("❌ 距離店面太遠 (" + Math.round(distance) + "公尺)。必須在店面 " + maxDist + " 公尺範圍內才能打卡！");
+                        setButtonsDisabled(false);
                     } else {
                         const form = document.getElementById('clock-form');
-                        let inputLat = document.createElement('input');
-                        inputLat.type = 'hidden'; inputLat.name = 'lat'; inputLat.value = userLat;
-                        form.appendChild(inputLat);
-                        let inputLng = document.createElement('input');
-                        inputLng.type = 'hidden'; inputLng.name = 'lng'; inputLng.value = userLng;
-                        form.appendChild(inputLng);
+                        let inputLat = document.getElementById('input-lat');
+                        let inputLng = document.getElementById('input-lng');
+                        inputLat.value = userLat;
+                        inputLng.value = userLng;
                         form.submit();
                     }
                 },
                 function(error) {
                     alert("❌ 無法取得您的 GPS 定位，請確認手機已開啟定位權限並再試一次！");
-                    btn.innerText = "送出打卡紀錄";
-                    btn.disabled = false;
+                    setButtonsDisabled(false);
                 },
                 { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
+        }
+
+        function setButtonsDisabled(state, text) {
+            const btnWork = document.getElementById('btn-work');
+            const btnOff = document.getElementById('btn-off');
+            const btnLeave = document.getElementById('btn-leave');
+            btnWork.disabled = state;
+            btnOff.disabled = state;
+            if (btnLeave) btnLeave.disabled = state;
+
+            if (state && text) {
+                if (currentAction === '上班') btnWork.innerText = text;
+                else if (currentAction === '下班') btnOff.innerText = text;
+                else if (btnLeave) btnLeave.innerText = text;
+            } else {
+                btnWork.innerText = "🟢 上班 (Clock In)";
+                btnOff.innerText = "🔴 下班 (Clock Out)";
+                if (btnLeave) btnLeave.innerText = "申請請假";
+            }
         }
 
         function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
@@ -152,37 +190,46 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <h2>🛠️ 魯班手機維修<br>員工出勤系統</h2>
-        <form id="clock-form" method="POST" action="/" onsubmit="verifyLocation(event)">
-            <select name="emp_name" required>
+        <form id="clock-form" method="POST" action="/">
+            <input type="hidden" name="action" id="action-input" value="">
+            <input type="hidden" name="lat" id="input-lat" value="">
+            <input type="hidden" name="lng" id="input-lng" value="">
+
+            <select name="emp_name" id="emp-select" required>
                 <option value="" disabled selected>-- 請選擇您的名字 --</option>
                 {% for emp in employees %}
                     <option value="{{ emp[0] }}">{{ emp[0] }}</option>
                 {% endfor %}
             </select>
-            <select name="action" required>
-                <option value="上班">上班 (Clock In)</option>
-                <option value="下班">下班 (Clock Out)</option>
-                <option value="請假">請假 (Leave)</option>
-            </select>
-            <select name="leave_code">
-                <option value="">請假代號 (非請假免填)</option>
-                <option value="特">特休假 (有薪)</option>
-                <option value="病">普通傷病假 (半薪)</option>
-                <option value="事">事假 (無薪)</option>
-                <option value="婚">婚假 (有薪)</option>
-                <option value="喪">喪假 (有薪)</option>
-                <option value="陪">陪產假 (有薪)</option>
-                <option value="產">產假/產檢假 (有薪)</option>
-                <option value="其他">其他</option>
-            </select>
-            <button type="submit" id="submit-btn">送出打卡紀錄</button>
+
+            <!-- 直覺的大按鍵：直接點擊上班或下班 -->
+            <div class="btn-group">
+                <button type="button" id="btn-work" class="btn-work" onclick="submitClock('上班')">🟢 上班 (Clock In)</button>
+                <button type="button" id="btn-off" class="btn-off" onclick="submitClock('下班')">🔴 下班 (Clock Out)</button>
+            </div>
+
+            <div class="leave-box">
+                <select name="leave_code" id="leave-select">
+                    <option value="">請選擇請假代號 (非請假免選)</option>
+                    <option value="特">特休假 (有薪)</option>
+                    <option value="病">普通傷病假 (半薪)</option>
+                    <option value="事">事假 (無薪)</option>
+                    <option value="婚">婚假 (有薪)</option>
+                    <option value="喪">喪假 (有薪)</option>
+                    <option value="陪">陪產假 (有薪)</option>
+                    <option value="產">產假/產檢假 (有薪)</option>
+                    <option value="其他">其他</option>
+                </select>
+                <button type="button" id="btn-leave" class="btn-leave" onclick="submitClock('請假')">送出請假申請</button>
+            </div>
         </form>
+
         {% if message %}
             <div class="message {% if success %}success{% endif %}">{{ message }}</div>
         {% endif %}
         <a href="/admin" class="admin-link">⚙️ 老闆後台管理</a>
     </div>
-    <div class="footer">Luban Mobile Repair System (GPS 50m Lock)</div>
+    <div class="footer">Luban Mobile Repair System (GPS {{ max_dist }}m Lock)</div>
 </body>
 </html>
 """
@@ -212,12 +259,13 @@ ADMIN_TEMPLATE = """
         .alert-success { background-color: #d4edda; color: #155724; padding: 12px; border-radius: 6px; margin-bottom: 15px; }
         .alert-danger { background-color: #f8d7da; color: #721c24; padding: 12px; border-radius: 6px; margin-bottom: 15px; }
         .status-tag { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.9em; font-weight: bold; margin-bottom: 15px; background-color: #e9ecef; }
+        .month-selector { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; gap: 15px; }
     </style>
 </head>
 <body>
     <div class="container">
         <a href="/" class="back-link">← 返回打卡首頁</a>
-        <h2>⚙️ 魯班手機維修 - 管理員後台 (排休管理、出勤與曠工結算)</h2>
+        <h2>⚙️ 魯班手機維修 - 管理員後台</h2>
 
         {% if not logged_in %}
             <form method="POST" action="/admin">
@@ -232,7 +280,17 @@ ADMIN_TEMPLATE = """
             {% if msg %}<div class="alert-success">{{ msg }}</div>{% endif %}
             {% if error %}<div class="alert-danger">{{ error }}</div>{% endif %}
 
-            <!-- 員工與勞基法特休管理 -->
+            <!-- 全局月份選擇器：控制後台所有統計與明細 -->
+            <div class="month-selector">
+                <form method="GET" action="/admin" style="display: flex; gap: 10px; align-items: center; margin: 0; flex-wrap: wrap;">
+                    <label for="month" style="font-weight: bold; font-size: 16px; color: #0056b3;">📅 選擇查看月份：</label>
+                    <input type="month" id="month" name="month" value="{{ selected_month }}" style="margin: 0; font-size: 16px;">
+                    <button type="submit" style="background-color: #007bff; margin: 0; width: auto; padding: 10px 18px;">切換月份資料</button>
+                </form>
+                <span style="font-size: 13px; color: #666;">（目前僅顯示 <b>{{ selected_month }}</b> 月份的結算報表、排休與打卡紀錄）</span>
+            </div>
+
+            <!-- 員工名單與特休 -->
             <div class="section">
                 <h3>👥 員工名單與法定特休額度</h3>
                 <form method="POST" action="/admin/employee">
@@ -252,7 +310,7 @@ ADMIN_TEMPLATE = """
                                     <strong style="font-size: 16px;">{{ emp[0] }}</strong> 
                                     <span style="color: #666; font-size: 13px; margin-left: 15px;">(到職日: {{ emp[1] if emp[1] else '未設定' }})</span>
                                     <span style="color: #007bff; font-size: 13px; margin-left: 15px; font-weight: bold;">
-                                        法定特休總天數: {{ emp[2] }} 天 | 已休: {{ emp[3] }} 天 | 剩餘: {{ emp[2] - emp[3] }} 天
+                                        法定特休總天數: {{ emp[2] }} 天 | 累計已休: {{ emp[3] }} 天 | 剩餘: {{ emp[2] - emp[3] }} 天
                                     </span>
                                 </div>
                                 <form action="/admin/employee/delete" method="POST" style="margin:0;">
@@ -267,52 +325,9 @@ ADMIN_TEMPLATE = """
                 </ul>
             </div>
 
-            <!-- 排休假設定 -->
+            <!-- 月份結算報表 -->
             <div class="section">
-                <h3>🗓️ 安排員工排休假 (排班制)</h3>
-                <form method="POST" action="/admin/schedule" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                    <select name="emp_name" required style="flex: 1; margin: 0; min-width: 150px;">
-                        <option value="" disabled selected>-- 選擇員工 --</option>
-                        {% for emp in employees %}
-                            <option value="{{ emp[0] }}">{{ emp[0] }}</option>
-                        {% endfor %}
-                    </select>
-                    <span style="font-size: 14px; color: #555;">排休日期:</span>
-                    <input type="date" name="off_date" value="{{ today_str }}" required style="margin: 0;">
-                    <button type="submit" style="margin: 0; width: auto; padding: 10px 20px; background-color: #17a2b8;">新增排休</button>
-                </form>
-
-                <h4 style="margin-top: 15px; color: #555;">近期排休紀錄：</h4>
-                <table>
-                    <tr>
-                        <th>員工姓名</th>
-                        <th>排休日期</th>
-                        <th>操作</th>
-                    </tr>
-                    {% for sch in schedules %}
-                    <tr>
-                        <td><strong>{{ sch[1] }}</strong></td>
-                        <td>{{ sch[2] }}</td>
-                        <td>
-                            <form action="/admin/schedule/delete" method="POST" style="margin:0;">
-                                <input type="hidden" name="sch_id" value="{{ sch[0] }}">
-                                <button type="submit" class="danger" style="padding:3px 8px; font-size:11px; margin:0; width:auto;">取消排休</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </table>
-            </div>
-
-            <!-- 月份結算報表 (含曠工統計) -->
-            <div class="section">
-                <h3>📊 員工月份出勤與排休結算</h3>
-                <form method="GET" action="/admin" style="display: flex; gap: 10px; align-items: center; margin-bottom: 15px;">
-                    <label for="month" style="font-weight: bold;">選擇結算月份：</label>
-                    <input type="month" id="month" name="month" value="{{ selected_month }}" style="margin: 0;">
-                    <button type="submit" style="background-color: #007bff; margin: 0; width: auto; padding: 8px 16px;">查詢月份報表</button>
-                </form>
-
+                <h3>📊 {{ selected_month }} 月份出勤與排休結算</h3>
                 <table>
                     <tr>
                         <th>員工姓名</th>
@@ -351,9 +366,50 @@ ADMIN_TEMPLATE = """
                 </table>
             </div>
 
-            <!-- 打卡紀錄總覽 -->
+            <!-- 當月排休設定與清單 -->
             <div class="section">
-                <h3>📋 所有打卡與請假明細紀錄</h3>
+                <h3>🗓️ 安排員工排休假 (目前顯示 {{ selected_month }} 當月紀錄)</h3>
+                <form method="POST" action="/admin/schedule" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <select name="emp_name" required style="flex: 1; margin: 0; min-width: 150px;">
+                        <option value="" disabled selected>-- 選擇員工 --</option>
+                        {% for emp in employees %}
+                            <option value="{{ emp[0] }}">{{ emp[0] }}</option>
+                        {% endfor %}
+                    </select>
+                    <span style="font-size: 14px; color: #555;">排休日期:</span>
+                    <input type="date" name="off_date" value="{{ today_str }}" required style="margin: 0;">
+                    <button type="submit" style="margin: 0; width: auto; padding: 10px 20px; background-color: #17a2b8;">新增排休</button>
+                </form>
+
+                <h4 style="margin-top: 15px; color: #555;">{{ selected_month }} 月排休名單：</h4>
+                <table>
+                    <tr>
+                        <th>員工姓名</th>
+                        <th>排休日期</th>
+                        <th>操作</th>
+                    </tr>
+                    {% if schedules %}
+                        {% for sch in schedules %}
+                        <tr>
+                            <td><strong>{{ sch[1] }}</strong></td>
+                            <td>{{ sch[2] }}</td>
+                            <td>
+                                <form action="/admin/schedule/delete" method="POST" style="margin:0;">
+                                    <input type="hidden" name="sch_id" value="{{ sch[0] }}">
+                                    <button type="submit" class="danger" style="padding:3px 8px; font-size:11px; margin:0; width:auto;">取消排休</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr><td colspan="3" style="color: #888;">{{ selected_month }} 月尚無任何排休設定。</td></tr>
+                    {% endif %}
+                </table>
+            </div>
+
+            <!-- 當月打卡明細紀錄 -->
+            <div class="section">
+                <h3>📋 {{ selected_month }} 月打卡與請假明細紀錄</h3>
                 <table>
                     <tr>
                         <th>編號</th>
@@ -364,24 +420,37 @@ ADMIN_TEMPLATE = """
                         <th>IP 位址</th>
                         <th>操作</th>
                     </tr>
-                    {% for row in records %}
-                    <tr>
-                        <td>{{ row[0] }}</td>
-                        <td>{{ row[1] }}</td>
-                        <td>{{ row[2] }}</td>
-                        <td>{{ row[3] if row[3] else '-' }}</td>
-                        <td>{{ row[4] }}</td>
-                        <td>{{ row[5] }}</td>
-                        <td>
-                            <form action="/admin/record/delete" method="POST" style="margin:0;">
-                                <input type="hidden" name="record_id" value="{{ row[0] }}">
-                                <button type="submit" class="danger" style="padding:4px 8px; font-size:11px; margin:0; width:auto;">刪除</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
+                    {% if records %}
+                        {% for row in records %}
+                        <tr>
+                            <td>{{ row[0] }}</td>
+                            <td>{{ row[1] }}</td>
+                            <td>
+                                {% if row[2] == '上班' %}
+                                    <span style="color: #28a745; font-weight: bold;">上班</span>
+                                {% elif row[2] == '下班' %}
+                                    <span style="color: #dc3545; font-weight: bold;">下班</span>
+                                {% else %}
+                                    <span style="color: #fd7e14; font-weight: bold;">{{ row[2] }}</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ row[3] if row[3] else '-' }}</td>
+                            <td>{{ row[4] }}</td>
+                            <td>{{ row[5] }}</td>
+                            <td>
+                                <form action="/admin/record/delete" method="POST" style="margin:0;">
+                                    <input type="hidden" name="record_id" value="{{ row[0] }}">
+                                    <button type="submit" class="danger" style="padding:4px 8px; font-size:11px; margin:0; width:auto;">刪除</button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr><td colspan="7" style="color: #888;">{{ selected_month }} 月尚無任何打卡紀錄。</td></tr>
+                    {% endif %}
                 </table>
             </div>
+
             <a href="/admin/logout"><button class="danger" style="width: auto; padding: 10px 20px;">登出後台</button></a>
         {% endif %}
     </div>
@@ -489,7 +558,7 @@ def admin():
                 name = emp[0]
                 hire_date = emp[1]
 
-                # 1. 取得當月所有實際上課/上班打卡日期 (集合)
+                # 1. 當月上班打卡
                 c.execute("""
                     SELECT DISTINCT DATE(timestamp) FROM records 
                     WHERE emp_name = %s AND action = '上班' AND timestamp >= %s AND timestamp < %s
@@ -497,7 +566,7 @@ def admin():
                 worked_dates = {row[0] for row in c.fetchall()}
                 work_days = len(worked_dates)
 
-                # 2. 取得當月所有排休日期 (集合)
+                # 2. 當月排休
                 c.execute("""
                     SELECT off_date FROM schedules 
                     WHERE emp_name = %s AND off_date >= %s AND off_date < %s
@@ -505,7 +574,7 @@ def admin():
                 off_dates = {row[0] for row in c.fetchall()}
                 off_days = len(off_dates)
 
-                # 3. 取得當月所有請假紀錄 (集合與統計)
+                # 3. 當月請假
                 c.execute("""
                     SELECT DATE(timestamp), leave_code FROM records 
                     WHERE emp_name = %s AND action = '請假' AND timestamp >= %s AND timestamp < %s AND leave_code IS NOT NULL AND leave_code != ''
@@ -518,20 +587,14 @@ def admin():
                     code = row[1]
                     leaves[code] = leaves.get(code, 0) + 1
 
-                # 4. 逐日檢查計算曠工 (只算到今天為止，不預判未來日期)
+                # 4. 曠工統計
                 absent_dates = []
                 for d in range(1, last_day + 1):
                     current_eval_date = datetime.date(year, month, d)
-                    
-                    # 超過今天不計曠工
                     if current_eval_date > today:
                         break
-                    
-                    # 尚未到職前不計曠工
                     if hire_date and current_eval_date < hire_date:
                         continue
-                    
-                    # 判斷曠工：不是排休日、沒有請假、沒有打上班卡
                     if (current_eval_date not in off_dates) and \
                        (current_eval_date not in leave_dates) and \
                        (current_eval_date not in worked_dates):
@@ -548,16 +611,25 @@ def admin():
                     'leaves': leaves
                 })
 
-            # 取得排休紀錄
-            c.execute("SELECT id, emp_name, off_date FROM schedules ORDER BY off_date DESC LIMIT 20")
+            # 只撈取「所選月份」的排休紀錄
+            c.execute("""
+                SELECT id, emp_name, off_date FROM schedules 
+                WHERE off_date >= %s AND off_date < %s 
+                ORDER BY off_date DESC
+            """, (start_date, end_date))
             schedules = c.fetchall()
 
-            # 取得打卡紀錄
-            c.execute("SELECT id, emp_name, action, leave_code, timestamp, ip_address FROM records ORDER BY id DESC")
+            # 只撈取「所選月份」的打卡明細紀錄
+            c.execute("""
+                SELECT id, emp_name, action, leave_code, timestamp, ip_address FROM records 
+                WHERE timestamp >= %s AND timestamp < %s 
+                ORDER BY id DESC
+            """, (start_date, end_date))
             records = c.fetchall()
+            
             c.close()
             conn.close()
-            db_status = "🟢 資料庫連線正常 (排休假管理與月結算運作中)"
+            db_status = f"🟢 資料庫連線正常 (目前結算月份：{selected_month})"
         except Exception as e:
             db_status = f"🔴 資料庫連線異常: {e}"
 
