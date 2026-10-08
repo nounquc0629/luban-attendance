@@ -54,7 +54,7 @@ def calculate_annual_leave(hire_date):
         return 0
     today = datetime.date.today()
     service_days = (today - hire_date).days
-    if service_days < 180:  # 未滿半年
+    if service_days < 180:
         return 0
     
     service_years = service_days / 365.25
@@ -105,17 +105,27 @@ HTML_TEMPLATE = """
         function submitClock(actionName) {
             const empSelect = document.getElementById('emp-select');
             if (!empSelect.value) {
-                alert("請先選擇您的名字！");
+                alert("⚠️ 請先選擇您的名字！");
                 empSelect.focus();
                 return;
             }
 
+            let confirmMsg = "";
             if (actionName === '請假') {
-                const leaveCode = document.getElementById('leave-select').value;
-                if (!leaveCode) {
-                    alert("請選擇請假代號！");
+                const leaveSelect = document.getElementById('leave-select');
+                const leaveText = leaveSelect.options[leaveSelect.selectedIndex].text;
+                if (!leaveSelect.value) {
+                    alert("⚠️ 請先選擇請假代號！");
                     return;
                 }
+                confirmMsg = "❓【打卡確認】\\n員工：" + empSelect.value + "\\n類別：請假 (" + leaveText + ")\\n\\n確定要送出請假申請嗎？";
+            } else {
+                confirmMsg = "❓【打卡確認】\\n員工：" + empSelect.value + "\\n動作：" + actionName + "\\n\\n確定要送出【" + actionName + "】打卡嗎？請確認未按錯！";
+            }
+
+            // 二次防呆提醒
+            if (!confirm(confirmMsg)) {
+                return; // 員工點取消，中斷送出
             }
 
             currentAction = actionName;
@@ -143,10 +153,8 @@ HTML_TEMPLATE = """
                         setButtonsDisabled(false);
                     } else {
                         const form = document.getElementById('clock-form');
-                        let inputLat = document.getElementById('input-lat');
-                        let inputLng = document.getElementById('input-lng');
-                        inputLat.value = userLat;
-                        inputLng.value = userLng;
+                        document.getElementById('input-lat').value = userLat;
+                        document.getElementById('input-lng').value = userLng;
                         form.submit();
                     }
                 },
@@ -173,7 +181,7 @@ HTML_TEMPLATE = """
             } else {
                 btnWork.innerText = "🟢 上班 (Clock In)";
                 btnOff.innerText = "🔴 下班 (Clock Out)";
-                if (btnLeave) btnLeave.innerText = "申請請假";
+                if (btnLeave) btnLeave.innerText = "送出請假申請";
             }
         }
 
@@ -202,7 +210,7 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </select>
 
-            <!-- 直覺的大按鍵：直接點擊上班或下班 -->
+            <!-- 直覺的大按鍵 -->
             <div class="btn-group">
                 <button type="button" id="btn-work" class="btn-work" onclick="submitClock('上班')">🟢 上班 (Clock In)</button>
                 <button type="button" id="btn-off" class="btn-off" onclick="submitClock('下班')">🔴 下班 (Clock Out)</button>
@@ -248,6 +256,7 @@ ADMIN_TEMPLATE = """
         input, button, select { padding: 10px; margin: 5px 0; border-radius: 5px; border: 1px solid #ccc; font-size: 15px; }
         button { background-color: #28a745; color: white; border: none; cursor: pointer; font-weight: bold; }
         button.danger { background-color: #dc3545; }
+        button.edit-btn { background-color: #ffc107; color: #212529; }
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { border: 1px solid #dee2e6; padding: 10px; text-align: center; font-size: 13px; }
         th { background-color: #007bff; color: white; }
@@ -260,6 +269,14 @@ ADMIN_TEMPLATE = """
         .alert-danger { background-color: #f8d7da; color: #721c24; padding: 12px; border-radius: 6px; margin-bottom: 15px; }
         .status-tag { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.9em; font-weight: bold; margin-bottom: 15px; background-color: #e9ecef; }
         .month-selector { background: #e8f4fd; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; gap: 15px; }
+
+        /* 修改打卡彈跳視窗 Modal */
+        .modal { display: none; position: fixed; z-index: 999; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); }
+        .modal-content { background-color: #fff; margin: 10% auto; padding: 25px; border-radius: 8px; width: 90%; max-width: 450px; text-align: left; box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .modal-header { font-size: 18px; font-weight: bold; margin-bottom: 15px; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
+        .modal-body label { font-size: 14px; font-weight: bold; display: block; margin-top: 10px; }
+        .modal-body input, .modal-body select { width: 100%; box-sizing: border-box; }
+        .modal-footer { margin-top: 20px; text-align: right; }
     </style>
 </head>
 <body>
@@ -280,7 +297,7 @@ ADMIN_TEMPLATE = """
             {% if msg %}<div class="alert-success">{{ msg }}</div>{% endif %}
             {% if error %}<div class="alert-danger">{{ error }}</div>{% endif %}
 
-            <!-- 全局月份選擇器：控制後台所有統計與明細 -->
+            <!-- 全局月份選擇器 -->
             <div class="month-selector">
                 <form method="GET" action="/admin" style="display: flex; gap: 10px; align-items: center; margin: 0; flex-wrap: wrap;">
                     <label for="month" style="font-weight: bold; font-size: 16px; color: #0056b3;">📅 選擇查看月份：</label>
@@ -315,7 +332,7 @@ ADMIN_TEMPLATE = """
                                 </div>
                                 <form action="/admin/employee/delete" method="POST" style="margin:0;">
                                     <input type="hidden" name="emp_name" value="{{ emp[0] }}">
-                                    <button type="submit" class="danger" style="padding:4px 10px; font-size:12px; margin:0; width:auto;">刪除</button>
+                                    <button type="submit" class="danger" style="padding:4px 10px; font-size:12px; margin:0; width:auto;" onclick="return confirm('確定要刪除員工 {{ emp[0] }} 嗎？');">刪除</button>
                                 </form>
                             </li>
                         {% endfor %}
@@ -371,386 +388,4 @@ ADMIN_TEMPLATE = """
                 <h3>🗓️ 安排員工排休假 (目前顯示 {{ selected_month }} 當月紀錄)</h3>
                 <form method="POST" action="/admin/schedule" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                     <select name="emp_name" required style="flex: 1; margin: 0; min-width: 150px;">
-                        <option value="" disabled selected>-- 選擇員工 --</option>
-                        {% for emp in employees %}
-                            <option value="{{ emp[0] }}">{{ emp[0] }}</option>
-                        {% endfor %}
-                    </select>
-                    <span style="font-size: 14px; color: #555;">排休日期:</span>
-                    <input type="date" name="off_date" value="{{ today_str }}" required style="margin: 0;">
-                    <button type="submit" style="margin: 0; width: auto; padding: 10px 20px; background-color: #17a2b8;">新增排休</button>
-                </form>
-
-                <h4 style="margin-top: 15px; color: #555;">{{ selected_month }} 月排休名單：</h4>
-                <table>
-                    <tr>
-                        <th>員工姓名</th>
-                        <th>排休日期</th>
-                        <th>操作</th>
-                    </tr>
-                    {% if schedules %}
-                        {% for sch in schedules %}
-                        <tr>
-                            <td><strong>{{ sch[1] }}</strong></td>
-                            <td>{{ sch[2] }}</td>
-                            <td>
-                                <form action="/admin/schedule/delete" method="POST" style="margin:0;">
-                                    <input type="hidden" name="sch_id" value="{{ sch[0] }}">
-                                    <button type="submit" class="danger" style="padding:3px 8px; font-size:11px; margin:0; width:auto;">取消排休</button>
-                                </form>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr><td colspan="3" style="color: #888;">{{ selected_month }} 月尚無任何排休設定。</td></tr>
-                    {% endif %}
-                </table>
-            </div>
-
-            <!-- 當月打卡明細紀錄 -->
-            <div class="section">
-                <h3>📋 {{ selected_month }} 月打卡與請假明細紀錄</h3>
-                <table>
-                    <tr>
-                        <th>編號</th>
-                        <th>員工姓名</th>
-                        <th>狀態</th>
-                        <th>請假代號</th>
-                        <th>打卡時間 (台灣時間)</th>
-                        <th>IP 位址</th>
-                        <th>操作</th>
-                    </tr>
-                    {% if records %}
-                        {% for row in records %}
-                        <tr>
-                            <td>{{ row[0] }}</td>
-                            <td>{{ row[1] }}</td>
-                            <td>
-                                {% if row[2] == '上班' %}
-                                    <span style="color: #28a745; font-weight: bold;">上班</span>
-                                {% elif row[2] == '下班' %}
-                                    <span style="color: #dc3545; font-weight: bold;">下班</span>
-                                {% else %}
-                                    <span style="color: #fd7e14; font-weight: bold;">{{ row[2] }}</span>
-                                {% endif %}
-                            </td>
-                            <td>{{ row[3] if row[3] else '-' }}</td>
-                            <td>{{ row[4] }}</td>
-                            <td>{{ row[5] }}</td>
-                            <td>
-                                <form action="/admin/record/delete" method="POST" style="margin:0;">
-                                    <input type="hidden" name="record_id" value="{{ row[0] }}">
-                                    <button type="submit" class="danger" style="padding:4px 8px; font-size:11px; margin:0; width:auto;">刪除</button>
-                                </form>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr><td colspan="7" style="color: #888;">{{ selected_month }} 月尚無任何打卡紀錄。</td></tr>
-                    {% endif %}
-                </table>
-            </div>
-
-            <a href="/admin/logout"><button class="danger" style="width: auto; padding: 10px 20px;">登出後台</button></a>
-        {% endif %}
-    </div>
-</body>
-</html>
-"""
-
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    message = ""
-    success = False
-    employees = []
-
-    try:
-        init_db()
-        conn = get_db_connection()
-        c = conn.cursor()
-        c.execute("SELECT name, hire_date FROM employees ORDER BY id")
-        employees = c.fetchall()
-        c.close()
-        conn.close()
-    except Exception as e:
-        message = f"讀取名單失敗: {e}"
-
-    if request.method == 'POST':
-        emp_name = request.form.get('emp_name')
-        action = request.form.get('action')
-        leave_code = request.form.get('leave_code', '').strip()
-        
-        if request.headers.getlist("X-Forwarded-For"):
-            user_ip = request.headers.getlist("X-Forwarded-For")[0].split(',')[0].strip()
-        else:
-            user_ip = request.remote_addr
-        
-        try:
-            current_time = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S")
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("INSERT INTO records (emp_name, action, leave_code, timestamp, ip_address) VALUES (%s, %s, %s, %s, %s)",
-                      (emp_name, action, leave_code, current_time, user_ip))
-            conn.commit()
-            c.close()
-            conn.close()
-            
-            success = True
-            message = f"✅ {emp_name} {action} 紀錄已同步！"
-        except Exception as e:
-            message = f"❌ 系統錯誤：{e}"
-
-    return render_template_string(HTML_TEMPLATE, employees=employees, message=message, success=success, store_lat=STORE_LAT, store_lng=STORE_LNG, max_dist=MAX_DISTANCE_METERS)
-
-@app.route('/admin', methods=['GET', 'POST'])
-def admin():
-    logged_in = session.get('logged_in', False)
-    error = session.pop('admin_err', '')
-    msg = session.pop('admin_msg', '')
-    
-    if request.method == 'POST':
-        password = request.form.get('password')
-        if password == ADMIN_PASSWORD:
-            session['logged_in'] = True
-            logged_in = True
-        else:
-            error = "密碼錯誤，請重新輸入！"
-
-    employees_data = []
-    records = []
-    schedules = []
-    monthly_stats = []
-    today_str = datetime.date.today().strftime("%Y-%m-%d")
-    selected_month = request.args.get('month', datetime.date.today().strftime("%Y-%m"))
-    db_status = "連線檢查中..."
-
-    if logged_in:
-        try:
-            init_db()
-            conn = get_db_connection()
-            c = conn.cursor()
-            
-            c.execute("SELECT name, hire_date FROM employees ORDER BY id")
-            raw_emps = c.fetchall()
-            
-            for emp in raw_emps:
-                name = emp[0]
-                hire_date = emp[1]
-                total_annual_leave = calculate_annual_leave(hire_date)
-                
-                c.execute("SELECT COUNT(*) FROM records WHERE emp_name = %s AND action = '請假' AND leave_code = '特'", (name,))
-                used_leave = c.fetchone()[0]
-                
-                employees_data.append((name, hire_date, total_annual_leave, used_leave))
-
-            year, month = map(int, selected_month.split('-'))
-            start_date = datetime.date(year, month, 1)
-            if month == 12:
-                end_date = datetime.date(year + 1, 1, 1)
-                last_day = 31
-            else:
-                end_date = datetime.date(year, month + 1, 1)
-                last_day = (end_date - datetime.timedelta(days=1)).day
-
-            today = datetime.date.today()
-
-            for emp in raw_emps:
-                name = emp[0]
-                hire_date = emp[1]
-
-                # 1. 當月上班打卡
-                c.execute("""
-                    SELECT DISTINCT DATE(timestamp) FROM records 
-                    WHERE emp_name = %s AND action = '上班' AND timestamp >= %s AND timestamp < %s
-                """, (name, start_date, end_date))
-                worked_dates = {row[0] for row in c.fetchall()}
-                work_days = len(worked_dates)
-
-                # 2. 當月排休
-                c.execute("""
-                    SELECT off_date FROM schedules 
-                    WHERE emp_name = %s AND off_date >= %s AND off_date < %s
-                """, (name, start_date, end_date))
-                off_dates = {row[0] for row in c.fetchall()}
-                off_days = len(off_dates)
-
-                # 3. 當月請假
-                c.execute("""
-                    SELECT DATE(timestamp), leave_code FROM records 
-                    WHERE emp_name = %s AND action = '請假' AND timestamp >= %s AND timestamp < %s AND leave_code IS NOT NULL AND leave_code != ''
-                """, (name, start_date, end_date))
-                leave_rows = c.fetchall()
-                leave_dates = {row[0] for row in leave_rows}
-                
-                leaves = {}
-                for row in leave_rows:
-                    code = row[1]
-                    leaves[code] = leaves.get(code, 0) + 1
-
-                # 4. 曠工統計
-                absent_dates = []
-                for d in range(1, last_day + 1):
-                    current_eval_date = datetime.date(year, month, d)
-                    if current_eval_date > today:
-                        break
-                    if hire_date and current_eval_date < hire_date:
-                        continue
-                    if (current_eval_date not in off_dates) and \
-                       (current_eval_date not in leave_dates) and \
-                       (current_eval_date not in worked_dates):
-                        absent_dates.append(current_eval_date.strftime("%m/%d"))
-
-                absent_days = len(absent_dates)
-
-                monthly_stats.append({
-                    'name': name,
-                    'work_days': work_days,
-                    'off_days': off_days,
-                    'absent_days': absent_days,
-                    'absent_dates': absent_dates,
-                    'leaves': leaves
-                })
-
-            # 只撈取「所選月份」的排休紀錄
-            c.execute("""
-                SELECT id, emp_name, off_date FROM schedules 
-                WHERE off_date >= %s AND off_date < %s 
-                ORDER BY off_date DESC
-            """, (start_date, end_date))
-            schedules = c.fetchall()
-
-            # 只撈取「所選月份」的打卡明細紀錄
-            c.execute("""
-                SELECT id, emp_name, action, leave_code, timestamp, ip_address FROM records 
-                WHERE timestamp >= %s AND timestamp < %s 
-                ORDER BY id DESC
-            """, (start_date, end_date))
-            records = c.fetchall()
-            
-            c.close()
-            conn.close()
-            db_status = f"🟢 資料庫連線正常 (目前結算月份：{selected_month})"
-        except Exception as e:
-            db_status = f"🔴 資料庫連線異常: {e}"
-
-    return render_template_string(ADMIN_TEMPLATE, logged_in=logged_in, error=error, msg=msg, db_status=db_status, 
-                                  employees=employees_data, records=records, schedules=schedules, today_str=today_str, 
-                                  selected_month=selected_month, monthly_stats=monthly_stats)
-
-@app.route('/admin/employee', methods=['POST'])
-def add_employee():
-    if not session.get('logged_in'):
-        return redirect(url_for('admin'))
-    
-    new_emp = request.form.get('new_emp_name', '').strip()
-    hire_date_str = request.form.get('hire_date', datetime.date.today().strftime("%Y-%m-%d"))
-    
-    if new_emp:
-        try:
-            init_db()
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("SELECT id FROM employees WHERE name = %s", (new_emp,))
-            if not c.fetchone():
-                c.execute("INSERT INTO employees (name, hire_date) VALUES (%s, %s)", (new_emp, hire_date_str))
-                conn.commit()
-                session['admin_msg'] = f"✅ 成功新增員工：{new_emp} (到職日: {hire_date_str})"
-            else:
-                session['admin_err'] = f"⚠️ 員工「{new_emp}」已在名單中！"
-            c.close()
-            conn.close()
-        except Exception as e:
-            session['admin_err'] = f"❌ 新增失敗，資料庫錯誤：{e}"
-            
-    return redirect(url_for('admin'))
-
-@app.route('/admin/employee/delete', methods=['POST'])
-def delete_employee():
-    if not session.get('logged_in'):
-        return redirect(url_for('admin'))
-    
-    emp_name = request.form.get('emp_name')
-    if emp_name:
-        try:
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("DELETE FROM employees WHERE name = %s", (emp_name,))
-            conn.commit()
-            c.close()
-            conn.close()
-            session['admin_msg'] = f"✅ 已成功刪除員工：{emp_name}"
-        except Exception as e:
-            session['admin_err'] = f"❌ 刪除失敗：{e}"
-            
-    return redirect(url_for('admin'))
-
-@app.route('/admin/schedule', methods=['POST'])
-def add_schedule():
-    if not session.get('logged_in'):
-        return redirect(url_for('admin'))
-    
-    emp_name = request.form.get('emp_name')
-    off_date = request.form.get('off_date')
-    
-    if emp_name and off_date:
-        try:
-            init_db()
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("INSERT INTO schedules (emp_name, off_date) VALUES (%s, %s)", (emp_name, off_date))
-            conn.commit()
-            c.close()
-            conn.close()
-            session['admin_msg'] = f"✅ 成功安排 {emp_name} 於 {off_date} 排休"
-        except Exception as e:
-            session['admin_err'] = f"❌ 排休設定失敗：{e}"
-            
-    return redirect(url_for('admin'))
-
-@app.route('/admin/schedule/delete', methods=['POST'])
-def delete_schedule():
-    if not session.get('logged_in'):
-        return redirect(url_for('admin'))
-    
-    sch_id = request.form.get('sch_id')
-    if sch_id:
-        try:
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("DELETE FROM schedules WHERE id = %s", (sch_id,))
-            conn.commit()
-            c.close()
-            conn.close()
-            session['admin_msg'] = f"✅ 已成功取消該筆排休紀錄"
-        except Exception as e:
-            session['admin_err'] = f"❌ 取消排休失敗：{e}"
-            
-    return redirect(url_for('admin'))
-
-@app.route('/admin/record/delete', methods=['POST'])
-def delete_record():
-    if not session.get('logged_in'):
-        return redirect(url_for('admin'))
-    
-    record_id = request.form.get('record_id')
-    if record_id:
-        try:
-            conn = get_db_connection()
-            c = conn.cursor()
-            c.execute("DELETE FROM records WHERE id = %s", (record_id,))
-            conn.commit()
-            c.close()
-            conn.close()
-            session['admin_msg'] = f"✅ 已成功刪除編號 #{record_id} 的打卡紀錄"
-        except Exception as e:
-            session['admin_err'] = f"❌ 刪除紀錄失敗：{e}"
-            
-    return redirect(url_for('admin'))
-
-@app.route('/admin/logout')
-def logout():
-    session.pop('logged_in', None)
-    return redirect(url_for('admin'))
-
-if __name__ == '__main__':
-    app.run()
+                        <option
