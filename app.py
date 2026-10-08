@@ -1,7 +1,8 @@
 import os
+import calendar
+import datetime
 import psycopg2
 from flask import Flask, request, render_template_string, redirect, url_for, session
-import datetime
 
 app = Flask(__name__)
 app.secret_key = 'luban_repair_secret_key'
@@ -31,19 +32,19 @@ def init_db():
                   leave_code VARCHAR(50),
                   timestamp TIMESTAMP,
                   ip_address VARCHAR(50))''')
-    
+
     c.execute('''CREATE TABLE IF NOT EXISTS employees
                  (id SERIAL PRIMARY KEY,
                   name VARCHAR(100),
                   hire_date DATE)''')
-    
+
     c.execute('''CREATE TABLE IF NOT EXISTS schedules
                  (id SERIAL PRIMARY KEY,
                   emp_name VARCHAR(100),
                   off_date DATE)''')
-    
+
     c.execute('''ALTER TABLE employees ADD COLUMN IF NOT EXISTS hire_date DATE''')
-    
+
     conn.commit()
     c.close()
     conn.close()
@@ -56,9 +57,9 @@ def calculate_annual_leave(hire_date):
     service_days = (today - hire_date).days
     if service_days < 180:
         return 0
-    
+
     service_years = service_days / 365.25
-    
+
     if service_years < 1:
         return 3
     elif service_years < 2:
@@ -123,9 +124,8 @@ HTML_TEMPLATE = """
                 confirmMsg = "❓【打卡確認】\\n員工：" + empSelect.value + "\\n動作：" + actionName + "\\n\\n確定要送出【" + actionName + "】打卡嗎？請確認未按錯！";
             }
 
-            // 二次防呆提醒
             if (!confirm(confirmMsg)) {
-                return; // 員工點取消，中斷送出
+                return;
             }
 
             currentAction = actionName;
@@ -210,7 +210,6 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </select>
 
-            <!-- 直覺的大按鍵 -->
             <div class="btn-group">
                 <button type="button" id="btn-work" class="btn-work" onclick="submitClock('上班')">🟢 上班 (Clock In)</button>
                 <button type="button" id="btn-off" class="btn-off" onclick="submitClock('下班')">🔴 下班 (Clock Out)</button>
@@ -388,4 +387,475 @@ ADMIN_TEMPLATE = """
                 <h3>🗓️ 安排員工排休假 (目前顯示 {{ selected_month }} 當月紀錄)</h3>
                 <form method="POST" action="/admin/schedule" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                     <select name="emp_name" required style="flex: 1; margin: 0; min-width: 150px;">
-                        <option
+                        <option value="" disabled selected>-- 選擇排休員工 --</option>
+                        {% for emp in employees %}
+                            <option value="{{ emp[0] }}">{{ emp[0] }}</option>
+                        {% endfor %}
+                    </select>
+                    <input type="date" name="off_date" required style="margin: 0;">
+                    <button type="submit" style="margin: 0; width: auto; padding: 10px 20px;">新增排休</button>
+                </form>
+
+                <table style="margin-top: 15px;">
+                    <tr>
+                        <th>員工姓名</th>
+                        <th>排休日期</th>
+                        <th>操作</th>
+                    </tr>
+                    {% for sch in schedules %}
+                    <tr>
+                        <td>{{ sch[1] }}</td>
+                        <td>{{ sch[2] }}</td>
+                        <td>
+                            <form action="/admin/schedule/delete" method="POST" style="margin:0; display:inline;">
+                                <input type="hidden" name="schedule_id" value="{{ sch[0] }}">
+                                <button type="submit" class="danger" style="padding:4px 10px; font-size:12px; margin:0; width:auto;" onclick="return confirm('確定要取消此排休嗎？');">取消排休</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not schedules %}
+                    <tr>
+                        <td colspan="3" style="color: #888;">此月份尚無任何排休設定。</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </div>
+
+            <!-- 打卡與請假明細紀錄表格 (含修改按鈕) -->
+            <div class="section">
+                <h3>📋 {{ selected_month }} 月打卡與請假明細紀錄</h3>
+                <table>
+                    <tr>
+                        <th>編號</th>
+                        <th>員工姓名</th>
+                        <th>狀態</th>
+                        <th>請假代號</th>
+                        <th>打卡時間 (台灣時間)</th>
+                        <th>IP 位址</th>
+                        <th>操作</th>
+                    </tr>
+                    {% for rec in records %}
+                    <tr>
+                        <td>{{ rec[0] }}</td>
+                        <td>{{ rec[1] }}</td>
+                        <td>
+                            {% if rec[2] == '上班' %}
+                                <span style="color:#28a745; font-weight:bold;">上班</span>
+                            {% elif rec[2] == '下班' %}
+                                <span style="color:#dc3545; font-weight:bold;">下班</span>
+                            {% else %}
+                                <span style="color:#fd7e14; font-weight:bold;">請假</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ rec[3] if rec[3] else '-' }}</td>
+                        <td>{{ rec[4].strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                        <td>{{ rec[5] }}</td>
+                        <td>
+                            <!-- 修改按鈕 -->
+                            <button type="button" class="edit-btn" style="padding:4px 8px; font-size:12px; margin:0 2px; width:auto;"
+                                    onclick="openEditModal('{{ rec[0] }}', '{{ rec[1] }}', '{{ rec[2] }}', '{{ rec[3] or '' }}', '{{ rec[4].strftime('%Y-%m-%dT%H:%M') }}')">
+                                修改
+                            </button>
+                            
+                            <!-- 刪除按鈕 -->
+                            <form action="/admin/record/delete" method="POST" style="display:inline; margin:0;">
+                                <input type="hidden" name="record_id" value="{{ rec[0] }}">
+                                <button type="submit" class="danger" style="padding:4px 8px; font-size:12px; margin:0 2px; width:auto;" onclick="return confirm('確定要刪除此筆打卡紀錄嗎？');">刪除</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    {% if not records %}
+                    <tr>
+                        <td colspan="7" style="color: #888;">此月份尚無任何打卡紀錄。</td>
+                    </tr>
+                    {% endif %}
+                </table>
+            </div>
+
+            <!-- 修改打卡彈跳視窗 (Modal) -->
+            <div id="editModal" class="modal">
+                <div class="modal-content">
+                    <div class="modal-header">✏️ 修改打卡 / 請假紀錄</div>
+                    <form method="POST" action="/admin/record/edit">
+                        <div class="modal-body">
+                            <input type="hidden" name="record_id" id="modal-record-id">
+                            
+                            <label>員工姓名：</label>
+                            <input type="text" id="modal-emp-name" readonly style="background-color: #eee;">
+
+                            <label>狀態 (動作)：</label>
+                            <select name="action" id="modal-action" required onchange="toggleLeaveField()">
+                                <option value="上班">上班</option>
+                                <option value="下班">下班</option>
+                                <option value="請假">請假</option>
+                            </select>
+
+                            <div id="modal-leave-group">
+                                <label>請假代號：</label>
+                                <select name="leave_code" id="modal-leave-code">
+                                    <option value="">-- 無 --</option>
+                                    <option value="特">特休假 (有薪)</option>
+                                    <option value="病">普通傷病假 (半薪)</option>
+                                    <option value="事">事假 (無薪)</option>
+                                    <option value="婚">婚假 (有薪)</option>
+                                    <option value="喪">喪假 (有薪)</option>
+                                    <option value="陪">陪產假 (有薪)</option>
+                                    <option value="產">產假/產檢假 (有薪)</option>
+                                    <option value="其他">其他</option>
+                                </select>
+                            </div>
+
+                            <label>打卡時間：</label>
+                            <input type="datetime-local" name="timestamp" id="modal-timestamp" required>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" style="background-color: #6c757d; margin:0 5px;" onclick="closeEditModal()">取消</button>
+                            <button type="submit" style="background-color: #28a745; margin:0 5px;">儲存修改</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <script>
+                function openEditModal(id, name, action, leaveCode, timestampStr) {
+                    document.getElementById('modal-record-id').value = id;
+                    document.getElementById('modal-emp-name').value = name;
+                    document.getElementById('modal-action').value = action;
+                    document.getElementById('modal-leave-code').value = leaveCode;
+                    document.getElementById('modal-timestamp').value = timestampStr;
+                    
+                    toggleLeaveField();
+                    document.getElementById('editModal').style.display = 'block';
+                }
+
+                function closeEditModal() {
+                    document.getElementById('editModal').style.display = 'none';
+                }
+
+                function toggleLeaveField() {
+                    const action = document.getElementById('modal-action').value;
+                    const leaveGroup = document.getElementById('modal-leave-group');
+                    if (action === '請假') {
+                        leaveGroup.style.display = 'block';
+                    } else {
+                        leaveGroup.style.display = 'none';
+                        document.getElementById('modal-leave-code').value = '';
+                    }
+                }
+
+                window.onclick = function(event) {
+                    const modal = document.getElementById('editModal');
+                    if (event.target == modal) {
+                        closeEditModal();
+                    }
+                }
+            </script>
+        {% endif %}
+    </div>
+</body>
+</html>
+"""
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    init_db()
+    message = None
+    success = False
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    if request.method == 'POST':
+        emp_name = request.form.get('emp_name')
+        action = request.form.get('action')
+        leave_code = request.form.get('leave_code') if action == '請假' else None
+        
+        # 取得 client IP
+        if request.headers.get('X-Forwarded-For'):
+            ip_address = request.headers.get('X-Forwarded-For').split(',')[0].strip()
+        else:
+            ip_address = request.remote_addr
+
+        # 台灣時區時間 (UTC+8)
+        now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+
+        if emp_name and action:
+            c.execute(
+                "INSERT INTO records (emp_name, action, leave_code, timestamp, ip_address) VALUES (%s, %s, %s, %s, %s)",
+                (emp_name, action, leave_code, now, ip_address)
+            )
+            conn.commit()
+            success = True
+            if action == '請假':
+                message = f"✅ 【{emp_name}】請假申請（{leave_code}）已成功送出！"
+            else:
+                message = f"✅ 【{emp_name}】{action}打卡成功！時間：{now.strftime('%H:%M:%S')}"
+
+    # 取得員工列表
+    c.execute("SELECT name FROM employees ORDER BY id ASC")
+    employees = c.fetchall()
+    c.close()
+    conn.close()
+
+    return render_template_string(
+        HTML_TEMPLATE,
+        employees=employees,
+        message=message,
+        success=success,
+        store_lat=STORE_LAT,
+        store_lng=STORE_LNG,
+        max_dist=MAX_DISTANCE_METERS
+    )
+
+@app.route('/admin', methods=['GET', 'POST'])
+def admin():
+    init_db()
+    today_dt = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+    today_str = today_dt.strftime('%Y-%m-%d')
+    selected_month = request.args.get('month', today_dt.strftime('%Y-%m'))
+
+    error = None
+    msg = None
+
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == ADMIN_PASSWORD:
+            session['admin_logged_in'] = True
+        else:
+            error = "密碼錯誤，請重新輸入！"
+
+    logged_in = session.get('admin_logged_in', False)
+    if not logged_in:
+        return render_template_string(ADMIN_TEMPLATE, logged_in=False, error=error)
+
+    # 計算月份起始與結束時間
+    year, month = map(int, selected_month.split('-'))
+    last_day = calendar.monthrange(year, month)[1]
+    start_date = datetime.date(year, month, 1)
+    end_date = datetime.date(year, month, last_day)
+    start_datetime = datetime.datetime(year, month, 1, 0, 0, 0)
+    end_datetime = datetime.datetime(year, month, last_day, 23, 59, 59)
+
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # 1. 取得員工列表與特休計算
+    c.execute("SELECT name, hire_date FROM employees ORDER BY id ASC")
+    raw_employees = c.fetchall()
+    employees = []
+    for emp in raw_employees:
+        name = emp[0]
+        hire_date = emp[1]
+        annual_quota = calculate_annual_leave(hire_date)
+        
+        # 累計已休特休天數
+        c.execute("""
+            SELECT COUNT(DISTINCT DATE(timestamp)) 
+            FROM records 
+            WHERE emp_name = %s AND action = '請假' AND leave_code = '特'
+        """, (name,))
+        used_annual = c.fetchone()[0] or 0
+        employees.append((name, hire_date, annual_quota, used_annual))
+
+    # 2. 月份出勤與排休結算
+    monthly_stats = []
+    for emp in raw_employees:
+        name = emp[0]
+        # 實際上班天數
+        c.execute("""
+            SELECT COUNT(DISTINCT DATE(timestamp)) 
+            FROM records 
+            WHERE emp_name = %s AND action = '上班' AND timestamp BETWEEN %s AND %s
+        """, (name, start_datetime, end_datetime))
+        work_days = c.fetchone()[0] or 0
+
+        # 當月排休天數與日期
+        c.execute("""
+            SELECT off_date FROM schedules 
+            WHERE emp_name = %s AND off_date BETWEEN %s AND %s
+        """, (name, start_date, end_date))
+        off_records = c.fetchall()
+        off_days = len(off_records)
+        off_dates = {sch[0] for sch in off_records}
+
+        # 當月各假別統計
+        c.execute("""
+            SELECT leave_code, COUNT(DISTINCT DATE(timestamp)) 
+            FROM records 
+            WHERE emp_name = %s AND action = '請假' AND timestamp BETWEEN %s AND %s
+            GROUP BY leave_code
+        """, (name, start_datetime, end_datetime))
+        leave_counts = {row[0]: row[1] for row in c.fetchall()}
+
+        # 曠工天數計算 (至今為止未上班、未排休、未請假的日子)
+        limit_date = min(today_dt.date(), end_date)
+        absent_dates = []
+        if limit_date >= start_date:
+            c.execute("""
+                SELECT DISTINCT DATE(timestamp) 
+                FROM records 
+                WHERE emp_name = %s AND timestamp BETWEEN %s AND %s
+            """, (name, start_datetime, datetime.datetime.combine(limit_date, datetime.time.max)))
+            active_dates = {row[0] for row in c.fetchall()}
+
+            current = start_date
+            while current <= limit_date:
+                if current not in off_dates and current not in active_dates:
+                    absent_dates.append(current.strftime('%m-%d'))
+                current += datetime.timedelta(days=1)
+
+        monthly_stats.append({
+            'name': name,
+            'work_days': work_days,
+            'off_days': off_days,
+            'absent_days': len(absent_dates),
+            'absent_dates': absent_dates,
+            'leaves': leave_counts
+        })
+
+    # 3. 當月排休清單
+    c.execute("""
+        SELECT id, emp_name, off_date 
+        FROM schedules 
+        WHERE off_date BETWEEN %s AND %s 
+        ORDER BY off_date DESC
+    """, (start_date, end_date))
+    schedules = c.fetchall()
+
+    # 4. 當月打卡明細紀錄
+    c.execute("""
+        SELECT id, emp_name, action, leave_code, timestamp, ip_address 
+        FROM records 
+        WHERE timestamp BETWEEN %s AND %s 
+        ORDER BY timestamp DESC
+    """, (start_datetime, end_datetime))
+    records = c.fetchall()
+
+    c.close()
+    conn.close()
+
+    return render_template_string(
+        ADMIN_TEMPLATE,
+        logged_in=True,
+        db_status="PostgreSQL 資料庫連線正常",
+        msg=msg,
+        error=error,
+        selected_month=selected_month,
+        today_str=today_str,
+        employees=employees,
+        monthly_stats=monthly_stats,
+        schedules=schedules,
+        records=records
+    )
+
+# 新增員工
+@app.route('/admin/employee', methods=['POST'])
+def add_employee():
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin'))
+    emp_name = request.form.get('new_emp_name', '').strip()
+    hire_date = request.form.get('hire_date')
+    if emp_name:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO employees (name, hire_date) VALUES (%s, %s)", (emp_name, hire_date or None))
+        conn.commit()
+        c.close()
+        conn.close()
+    return redirect(request.referrer or url_for('admin'))
+
+# 刪除員工
+@app.route('/admin/employee/delete', methods=['POST'])
+def delete_employee():
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin'))
+    emp_name = request.form.get('emp_name')
+    if emp_name:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM employees WHERE name = %s", (emp_name,))
+        conn.commit()
+        c.close()
+        conn.close()
+    return redirect(request.referrer or url_for('admin'))
+
+# 新增排休
+@app.route('/admin/schedule', methods=['POST'])
+def add_schedule():
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin'))
+    emp_name = request.form.get('emp_name')
+    off_date = request.form.get('off_date')
+    if emp_name and off_date:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("INSERT INTO schedules (emp_name, off_date) VALUES (%s, %s)", (emp_name, off_date))
+        conn.commit()
+        c.close()
+        conn.close()
+    return redirect(request.referrer or url_for('admin'))
+
+# 取消排休
+@app.route('/admin/schedule/delete', methods=['POST'])
+def delete_schedule():
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin'))
+    schedule_id = request.form.get('schedule_id')
+    if schedule_id:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM schedules WHERE id = %s", (schedule_id,))
+        conn.commit()
+        c.close()
+        conn.close()
+    return redirect(request.referrer or url_for('admin'))
+
+# 刪除打卡紀錄
+@app.route('/admin/record/delete', methods=['POST'])
+def delete_record():
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin'))
+    record_id = request.form.get('record_id')
+    if record_id:
+        conn = get_db_connection()
+        c = conn.cursor()
+        c.execute("DELETE FROM records WHERE id = %s", (record_id,))
+        conn.commit()
+        c.close()
+        conn.close()
+    return redirect(request.referrer or url_for('admin'))
+
+# 修改打卡紀錄 (新增)
+@app.route('/admin/record/edit', methods=['POST'])
+def edit_record():
+    if not session.get('admin_logged_in'):
+        return redirect(url_for('admin'))
+    
+    record_id = request.form.get('record_id')
+    action = request.form.get('action')
+    leave_code = request.form.get('leave_code') if action == '請假' else None
+    timestamp_str = request.form.get('timestamp')
+    
+    if record_id and action and timestamp_str:
+        try:
+            new_timestamp = datetime.datetime.strptime(timestamp_str, "%Y-%m-%dT%H:%M")
+            conn = get_db_connection()
+            c = conn.cursor()
+            c.execute("""
+                UPDATE records 
+                SET action = %s, leave_code = %s, timestamp = %s 
+                WHERE id = %s
+            """, (action, leave_code, new_timestamp, record_id))
+            conn.commit()
+            c.close()
+            conn.close()
+        except Exception as e:
+            print(f"修改紀錄失敗: {e}")
+            
+    return redirect(request.referrer or url_for('admin'))
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
